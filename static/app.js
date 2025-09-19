@@ -1,290 +1,225 @@
-// ===== Constants & helpers =====
-const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr"];
-const LS_COURSES = "myCourses";
-const LS_NAME = "myName";
-const LS_INSTALLED_OK = "pwaInstalledOK";
-
-const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
-const setCourses = (arr) => localStorage.setItem(LS_COURSES, JSON.stringify(arr || []));
-const getName = () => localStorage.getItem(LS_NAME) || "";
-const setName = (v) => localStorage.setItem(LS_NAME, v || "");
-
-function parseHM(t) { const [h, m] = t.split(":").map(Number); return h * 60 + m; }
-function fmtHM(mins) { const h = Math.floor(mins / 60), m = mins % 60; return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`; }
-function dayIdxISO(iso) { const d = new Date(iso); const g = d.getDay(); return g === 0 ? 7 : g; }
+/* ====== PWA: „erst installieren, dann nutzen“ ====== */
 const isStandalone = () =>
-  window.matchMedia && window.matchMedia('(display-mode: standalone)').matches ||
+  window.matchMedia?.("(display-mode: standalone)").matches ||
   window.navigator.standalone === true;
 
-// ===== INSTALL GATE =====
-let deferredPrompt = null;
-function showInstallGate() {
+(function gateInstall() {
   const gate = document.getElementById("install-gate");
-  gate.style.display = "flex";
-}
-function hideInstallGate() {
-  const gate = document.getElementById("install-gate");
-  gate.style.display = "none";
-}
-function checkInstalledOrBypass() {
-  const url = new URL(window.location.href);
-  const devBypass = url.searchParams.get("dev") === "1";
-  if (devBypass) localStorage.setItem(LS_INSTALLED_OK, "1");
-
-  if (localStorage.getItem(LS_INSTALLED_OK) === "1" || isStandalone()) {
-    hideInstallGate();
-    return true;
-  }
-  showInstallGate();
-  return false;
-}
-
-// capture beforeinstallprompt (Chrome/Android)
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredPrompt = e;
-  const btn = document.getElementById("btn-install");
-  if (btn) btn.style.display = "inline-block";
-});
-
-window.addEventListener('appinstalled', () => {
-  localStorage.setItem(LS_INSTALLED_OK, "1");
-  hideInstallGate();
-  // Nach Install neu laden, damit SW/manifest sauber greifen
-  setTimeout(() => location.reload(), 500);
-});
-
-// Gate buttons
-function wireGateButtons() {
-  const btnInstall = document.getElementById("btn-install");
-  const btnCheck   = document.getElementById("btn-check");
-  const btnDev     = document.getElementById("btn-dev");
-  if (btnInstall) {
-    btnInstall.onclick = async () => {
-      if (!deferredPrompt) return;
-      deferredPrompt.prompt();
-      try { await deferredPrompt.userChoice; } catch(_) {}
-      deferredPrompt = null;
-    };
-  }
-  if (btnCheck) {
-    btnCheck.onclick = () => {
-      if (isStandalone()) {
-        localStorage.setItem(LS_INSTALLED_OK, "1");
-        hideInstallGate();
-        location.reload();
-      } else {
-        alert("Noch nicht installiert erkannt. Bitte wirklich zum Home-Bildschirm hinzufügen.");
-      }
-    };
-  }
-  // dev bypass link sichtbar machen wenn ?dev im URL vorhanden ist
-  if (new URL(location.href).searchParams.get("dev") === "1" && btnDev) {
-    btnDev.style.display = "inline-block";
-    btnDev.onclick = (e) => {
+  const btn = document.getElementById("gate-continue");
+  if (!isStandalone()) {
+    gate.style.display = "flex";
+    // Android: wenn beforeinstallprompt verfügbar -> Knopf anzeigen
+    let deferred;
+    window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
-      localStorage.setItem(LS_INSTALLED_OK, "1");
-      hideInstallGate();
-      location.reload();
-    };
+      deferred = e;
+      btn.style.display = "inline-block";
+      btn.onclick = async () => { deferred.prompt(); };
+    });
+    // iOS hat keinen Prompt -> Gate bleibt, bis installiert wurde.
+    // Als Fallback: Nutzer kann Seite neu öffnen nach Installation.
+    window.addEventListener("visibilitychange", () => {
+      if (!document.hidden && isStandalone()) {
+        gate.remove();
+      }
+    });
+  } else {
+    gate.remove();
   }
-}
+})();
 
-// ===== Course selection =====
+/* ====== LocalStorage ====== */
+const LS_COURSES = "myCourses";      // Array<String>
+const LS_NAME    = "myName";         // String
+const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
+const setCourses = (arr) => localStorage.setItem(LS_COURSES, JSON.stringify(arr || []));
+const getName    = () => localStorage.getItem(LS_NAME) || "";
+const setName    = (v) => localStorage.setItem(LS_NAME, v || "");
+
+/* ====== Helpers ====== */
+const WEEKDAYS = ["Mo","Di","Mi","Do","Fr"];
+const parseHM = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
+const fmtHM = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
+const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
+
+/* ====== Kurs-Auswahl ====== */
 function buildCourseSelection(allLessons) {
+  const cs = document.getElementById("course-selection");
   const nameInput = document.getElementById("profile-name");
-  if (nameInput && !nameInput.dataset.init) {
-    nameInput.value = getName();
-    nameInput.dataset.init = "1";
-  }
-
   const box = document.getElementById("courses");
-  if (!box) return;
-  box.innerHTML = "";
+  const editBtn = document.getElementById("edit-courses");
+  const saveBtn = document.getElementById("save-courses");
 
+  // name preset
+  nameInput.value = getName();
+
+  // Liste einmal aufbauen
+  box.innerHTML = "";
   const subjects = [...new Set(allLessons.map(l => l.subject).filter(Boolean))]
     .sort((a,b)=>a.localeCompare(b,"de"));
   const saved = new Set(getCourses());
 
   subjects.forEach(sub => {
-    const id = "sub_" + sub.replace(/\W+/g, "_");
+    const id = "sub_" + sub.replace(/\W+/g,"_");
     const label = document.createElement("label");
     label.className = "chk";
-    label.innerHTML = `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub) ? "checked" : ""}> <span>${sub}</span>`;
+    label.innerHTML = `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}> <span>${sub}</span>`;
     box.appendChild(label);
   });
 
-  const saveBtn = document.getElementById("save-courses");
-  const editBtn = document.getElementById("edit-courses");
+  saveBtn.onclick = () => {
+    const selected = [...box.querySelectorAll("input:checked")].map(i => i.value).slice(0,12);
+    setCourses(selected);
+    setName(nameInput.value.trim());
+    cs.style.display = "none";
+    editBtn.style.display = "inline-block";
+    loadTimetable(true);
+  };
 
-  if (saveBtn && !saveBtn.dataset.bound) {
-    saveBtn.dataset.bound = "1";
-    saveBtn.onclick = () => {
-      const selected = [...box.querySelectorAll("input:checked")].map(i => i.value).slice(0, 12);
-      setCourses(selected);
-      setName(nameInput.value.trim());
-      document.getElementById("course-selection").style.display = "none";
-      if (editBtn) editBtn.style.display = "inline-block";
-      loadTimetable(true);
-    };
-  }
+  editBtn.onclick = () => {
+    cs.style.display = "block";
+    editBtn.style.display = "none";
+  };
 
-  if (editBtn && !editBtn.dataset.bound) {
-    editBtn.dataset.bound = "1";
-    editBtn.onclick = () => {
-      document.getElementById("course-selection").style.display = "block";
-      editBtn.style.display = "none";
-      window.scrollTo({top:0, behavior:"smooth"});
-    };
+  // beim ersten Start: Auswahl zeigen, sonst verstecken
+  if (getCourses().length === 0) {
+    cs.style.display = "block";
+    editBtn.style.display = "none";
+  } else {
+    cs.style.display = "none";
+    editBtn.style.display = "inline-block";
   }
 }
 
-// ===== Grid render =====
+/* ====== Grid-Rendering ====== */
 function buildGrid(lessons) {
-  const container = document.getElementById("timetable");
-  container.innerHTML = "";
+  const wrap = document.getElementById("timetable");
+  wrap.innerHTML = "";
 
-  // Collect times & keep only Mon–Fri
+  // nur Mo–Fr
   const tset = new Set();
   const valid = [];
-  lessons.forEach(l => {
+  for (const l of lessons) {
     const d = dayIdxISO(l.date);
-    if (d >= 1 && d <= 5) {
+    if (d>=1 && d<=5) {
       valid.push(l);
       tset.add(parseHM(l.start));
       tset.add(parseHM(l.end));
     }
-  });
+  }
   const times = [...tset].sort((a,b)=>a-b);
   if (times.length < 2) {
-    container.innerHTML = "<p class='muted'>Keine Einträge.</p>";
+    wrap.innerHTML = `<div class="card"><p class="muted">Keine Einträge.</p></div>`;
     return;
   }
 
   const grid = document.createElement("div");
   grid.className = "grid";
 
-  // Header row
+  // Header
   const corner = document.createElement("div");
-  corner.className = "hdr corner";
-  corner.textContent = "Zeit";
-  grid.appendChild(corner);
-  for (let d = 1; d <= 5; d++) {
-    const h = document.createElement("div");
-    h.className = "hdr day";
-    h.textContent = WEEKDAYS[d-1];
-    grid.appendChild(h);
+  corner.className = "hdr corner"; corner.textContent = "Zeit"; grid.appendChild(corner);
+  for (let d=1; d<=5; d++){
+    const h=document.createElement("div"); h.className="hdr day"; h.textContent=WEEKDAYS[d-1]; grid.appendChild(h);
   }
 
-  // Zeit- & Slot-Reihen
-  for (let i = 0; i < times.length - 1; i++) {
-    const startM = times[i], endM = times[i+1];
-    const duration = endM - startM; // in Minuten
-    const isBreak = duration <= 20; // Heuristik: kurze Intervalle = Pause
+  // Time rows & empty slots
+  for (let i=0; i<times.length-1; i++){
+    const tc=document.createElement("div");
+    tc.className="timecell";
+    tc.textContent = `${fmtHM(times[i])}–${fmtHM(times[i+1])}`;
+    tc.style.gridColumn = "1";
+    tc.style.gridRow = String(i+2);
+    grid.appendChild(tc);
 
-    const timeCell = document.createElement("div");
-    timeCell.className = "timecell";
-    if (isBreak) timeCell.classList.add("breakrow");
-    timeCell.textContent = `${fmtHM(startM)}–${fmtHM(endM)}`;
-    timeCell.style.gridColumn = "1";
-    timeCell.style.gridRow = String(i + 2);
-    grid.appendChild(timeCell);
-
-    for (let d = 1; d <= 5; d++) {
-      const slot = document.createElement("div");
-      slot.className = "slot";
-      if (isBreak) slot.classList.add("breakrow");
-      slot.style.gridColumn = String(d + 1);
-      slot.style.gridRow = String(i + 2);
+    for(let d=1; d<=5; d++){
+      const slot=document.createElement("div");
+      slot.className="slot";
+      slot.style.gridColumn=String(d+1);
+      slot.style.gridRow=String(i+2);
       grid.appendChild(slot);
     }
   }
 
-  const rowIndexFor = (mins) => {
-    for (let i = 0; i < times.length; i++) if (times[i] === mins) return i;
-    const idx = times.findIndex(t => t > mins);
-    return Math.max(0, idx - 1);
+  const rowIndexFor = (m) => {
+    for (let i=0;i<times.length;i++) if (times[i]===m) return i;
+    const idx = times.findIndex(t=>t>m);
+    return Math.max(0, idx-1);
   };
 
-  // Lessons platzieren
-  valid.forEach(l => {
+  // place lessons
+  for (const l of valid){
     const day = dayIdxISO(l.date);
     const s = parseHM(l.start), e = parseHM(l.end);
     const r0 = rowIndexFor(s), r1 = rowIndexFor(e);
-    const span = Math.max(1, r1 - r0);
 
     const card = document.createElement("div");
     card.className = `lesson ${l.status}`;
-    card.style.gridColumn = String(day + 1);
-    card.style.gridRow = `${r0 + 2} / span ${span}`;
+    card.style.gridColumn = String(day+1);
+    card.style.gridRow    = `${r0+2} / ${r1+2}`;
 
-    const badge =
-      l.status === "entfaellt" ? "🟥 Entfällt" :
-      l.status === "vertretung" ? "⚠️ Vertretung" :
-      l.status === "aenderung" ? "🟦 Änderung" : "";
+    // variable Reihenhöhen: Header + pro Intervall normale vs. Pause
+    const rowHeights = ["var(--hdr-row)"];
+    for (let i = 0; i < times.length - 1; i++) {
+      const duration = times[i + 1] - times[i]; // Minuten
+      // Alles <= 25 Minuten gilt als Pause -> halb so hoch
+      rowHeights.push(duration <= 25 ? "var(--row-break)" : "var(--row-normal)");
+    }
+    grid.style.gridTemplateRows = rowHeights.join(" ");
 
-    // Zeit links ausblenden – nur Raum/Lehrer/Badge/Notiz anzeigen
+
+    const badge = l.status==="entfaellt" ? "🟥 Entfällt"
+                : l.status==="vertretung" ? "⚠️ Vertretung"
+                : l.status==="aenderung" ? "🟦 Änderung" : "";
+
     card.innerHTML = `
-      <div class="lesson-title">${l.subject || "—"}</div>
-      <div class="lesson-meta">
-        ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
-        ${l.room ? `<span>· ${l.room}</span>` : ""}
-      </div>
-      ${badge ? `<div class="badge">${badge}</div>` : ""}
-      ${l.note ? `<div class="note">${l.note}</div>` : ""}
-    `;
-    grid.appendChild(card);
-  });
+    <div class="lesson-title">${l.subject || "—"}</div>
+    <div class="lesson-meta">
+      ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
+      ${l.room ? `<span>· ${l.room}</span>` : ""}
+    </div>
+    ${badge ? `<div class="badge">${badge}</div>` : ""}
+    ${l.note ? `<div class="note">${l.note}</div>` : ""}
+  `;
 
-  container.appendChild(grid);
+    grid.appendChild(card);
+  }
+
+  wrap.appendChild(grid);
 }
 
-// ===== Fetch + orchestrate =====
-let refreshTimer = null;
-
-async function loadTimetable(force = false) {
-  // Abbrechen, wenn Install-Zwang nicht erfüllt
-  if (!checkInstalledOrBypass()) return;
-
-  const res = await fetch("/api/timetable");
+/* ====== Fetch + Auto-Refresh ====== */
+async function loadTimetable(force=false){
+  const res = await fetch("/api/timetable", {cache:"no-store"});
   const data = await res.json();
   let lessons = data.lessons || [];
 
-  // Auswahl initial aufbauen
-  const cs = document.getElementById("course-selection");
-  if (!cs.dataset.init) {
+  // Kursauswahl initialisieren
+  if (!document.getElementById("course-selection").dataset.init){
     buildCourseSelection(lessons);
-    cs.dataset.init = "1";
+    document.getElementById("course-selection").dataset.init = "1";
   }
 
-  // Wenn Kurse gespeichert → Auswahl verstecken
-  const saved = getCourses();
-  const editBtn = document.getElementById("edit-courses");
-  if (saved.length > 0) {
-    cs.style.display = "none";
-    if (editBtn) editBtn.style.display = "inline-block";
-    lessons = lessons.filter(l => saved.includes(l.subject));
-  } else {
-    cs.style.display = "block";
-    if (editBtn) editBtn.style.display = "none";
+  // Filtern
+  const selected = getCourses();
+  if (selected.length) {
+    lessons = lessons.filter(l => selected.includes(l.subject));
   }
 
-  // Sortierung
-  lessons.sort((a,b) => {
-    if (a.date !== b.date) return a.date.localeCompare(b.date);
-    if (a.start !== b.start) return a.start.localeCompare(b.start);
-    return (a.subject || "").localeCompare(b.subject || "");
+  lessons.sort((a,b)=>{
+    if (a.date!==b.date) return a.date.localeCompare(b.date);
+    if (a.start!==b.start) return a.start.localeCompare(b.start);
+    return (a.subject||"").localeCompare(b.subject||"");
   });
 
   buildGrid(lessons);
-
-  // Auto-Refresh (alle 5 Minuten)
-  if (refreshTimer) clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => loadTimetable(true), 5 * 60 * 1000);
 }
 
-// ===== Init =====
-document.addEventListener("DOMContentLoaded", () => {
-  wireGateButtons();
+// init
+document.addEventListener("DOMContentLoaded", ()=>{
   loadTimetable();
+  // alle 5 Minuten refresh
+  setInterval(()=>loadTimetable(true), 5*60*1000);
+  // bei Rückkehr in den Tab sofort aktualisieren
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });

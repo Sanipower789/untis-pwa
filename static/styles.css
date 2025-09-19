@@ -1,6 +1,9 @@
 :root{
   --bg:#0f0f10; --card:#1c1d22; --ink:#f2f3f5; --muted:#a7aab1;
   --grid:#333842; --brand:#6a1b9a; --btn:#1976d2;
+  --hdr-row: 56px;        /* Kopfzeile Höhe */
+  --row-normal: 64px;     /* normale Unterrichts-Row (wie jetzt) */
+  --row-break: 36px;      /* Pausen-Row (halb so hoch) */
 }
 
 *{box-sizing:border-box}
@@ -50,12 +53,6 @@ button{
   border-radius:12px;
   overflow:hidden;
   background:#0f1014;
-}
-
-.timecell.break,
-.slot.break {
-  height:36px !important;
-  min-height:36px !important;
 }
 
 /* headers & separators */
