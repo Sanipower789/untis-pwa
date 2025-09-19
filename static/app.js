@@ -119,7 +119,7 @@ function buildGrid(lessons) {
   const rowHeights = []; // one entry for every interval between times[i] -> times[i+1]
   for (let i = 0; i < times.length - 1; i++) {
     const duration = times[i+1] - times[i]; // minutes
-    rowHeights.push(duration <= 20 ? ROW_BREAK : ROW_NORMAL);
+    rowHeights.push(duration <= 30 ? ROW_BREAK : ROW_NORMAL);
   }
 
   const grid = document.createElement("div");
