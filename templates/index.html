@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mein Stundenplan</title>
+
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=22">
+  <meta name="theme-color" content="#6a1b9a" />
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=22">
+</head>
+<body>
+
+  <!-- Install-Overlay: blockt die App bis Install -->
+  <div id="install-gate" class="gate">
+    <div class="gate-card">
+      <h2>Zum Home-Bildschirm hinzufügen</h2>
+      <p>Damit die App funktioniert, installiere sie bitte zuerst:</p>
+      <ol>
+        <li><b>iPhone/iPad (Safari):</b> Teilen-Icon ▸ <b>Zum Home-Bildschirm</b>.</li>
+        <li><b>Android (Chrome):</b> Menü ⋮ ▸ <b>App installieren</b>.</li>
+      </ol>
+      <button id="gate-continue" style="display:none;">Weiter</button>
+    </div>
+  </div>
+
+  <header>
+    <h1>📅 Mein Stundenplan</h1>
+    <button id="edit-courses" style="display:none;">Kurse bearbeiten</button>
+  </header>
+
+  <main>
+    <!-- Kurs-Auswahl -->
+    <section id="course-selection" class="card" style="display:none;">
+      <h2>Kurse auswählen</h2>
+
+      <div class="row">
+        <label for="profile-name">Dein Name:</label>
+        <input id="profile-name" type="text" placeholder="z. B. Sani">
+        <button id="save-courses">Speichern</button>
+      </div>
+
+      <p class="muted">Wähle bis zu 12 Kurse.</p>
+      <div id="courses" class="courses"></div>
+    </section>
+
+    <!-- Stundenplan -->
+    <section id="timetable"></section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}?v=22"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=22");
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "Mein Stundenplan",
+  "short_name": "Stundenplan",
+  "start_url": "/?source=pwa",
+  "display": "standalone",
+  "background_color": "#0f0f10",
+  "theme_color": "#6a1b9a",
+  "icons": [
+    { "src": "/static/icon.png", "type": "image/png", "sizes": "192x192" }
+  ]
+}
