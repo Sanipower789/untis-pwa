@@ -124,22 +124,32 @@ function buildGrid(lessons) {
   }
 
   // Time rows & empty slots
-  for (let i=0; i<times.length-1; i++){
-    const tc=document.createElement("div");
-    tc.className="timecell";
-    tc.textContent = `${fmtHM(times[i])}–${fmtHM(times[i+1])}`;
-    tc.style.gridColumn = "1";
-    tc.style.gridRow = String(i+2);
-    grid.appendChild(tc);
+for (let i = 0; i < times.length - 1; i++) {
+  const startM = times[i];
+  const endM = times[i+1];
+  const duration = endM - startM;
 
-    for(let d=1; d<=5; d++){
-      const slot=document.createElement("div");
-      slot.className="slot";
-      slot.style.gridColumn=String(d+1);
-      slot.style.gridRow=String(i+2);
-      grid.appendChild(slot);
-    }
+  const timeCell = document.createElement("div");
+  timeCell.className = "timecell";
+  if (duration <= 20) {
+    timeCell.classList.add("breakcell");
   }
+  timeCell.textContent = `${fmtHM(startM)}–${fmtHM(endM)}`;
+  timeCell.style.gridColumn = "1";
+  timeCell.style.gridRow = String(i + 2);
+  grid.appendChild(timeCell);
+
+  for (let d = 1; d <= 5; d++) {
+    const slot = document.createElement("div");
+    slot.className = "slot";
+    if (duration <= 20) {
+      slot.classList.add("breakcell");
+    }
+    slot.style.gridColumn = String(d + 1);
+    slot.style.gridRow = String(i + 2);
+    grid.appendChild(slot);
+  }
+}
 
   const rowIndexFor = (m) => {
     for (let i=0;i<times.length;i++) if (times[i]===m) return i;
@@ -157,16 +167,6 @@ function buildGrid(lessons) {
     card.className = `lesson ${l.status}`;
     card.style.gridColumn = String(day+1);
     card.style.gridRow    = `${r0+2} / ${r1+2}`;
-
-    // variable Reihenhöhen: Header + pro Intervall normale vs. Pause
-    const rowHeights = ["var(--hdr-row)"];
-    for (let i = 0; i < times.length - 1; i++) {
-      const duration = times[i + 1] - times[i]; // Minuten
-      // Alles <= 25 Minuten gilt als Pause -> halb so hoch
-      rowHeights.push(duration <= 25 ? "var(--row-break)" : "var(--row-normal)");
-    }
-    grid.style.gridTemplateRows = rowHeights.join(" ");
-
 
     const badge = l.status==="entfaellt" ? "🟥 Entfällt"
                 : l.status==="vertretung" ? "⚠️ Vertretung"

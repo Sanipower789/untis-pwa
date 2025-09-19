@@ -1,9 +1,6 @@
 :root{
   --bg:#0f0f10; --card:#1c1d22; --ink:#f2f3f5; --muted:#a7aab1;
   --grid:#333842; --brand:#6a1b9a; --btn:#1976d2;
-  --hdr-row: 56px;        /* Kopfzeile Höhe */
-  --row-normal: 64px;     /* normale Unterrichts-Row (wie jetzt) */
-  --row-break: 36px;      /* Pausen-Row (halb so hoch) */
 }
 
 *{box-sizing:border-box}
@@ -25,6 +22,12 @@ button{
   background:var(--btn);color:#fff;border:0;border-radius:10px;
   padding:8px 12px;font-weight:700
 }
+
+/* Pausen kürzer darstellen */
+.breakcell {
+  grid-auto-rows: 36px !important; /* halb so hoch wie 72px Unterricht */
+}
+
 .card{
   background:#17181d;border:1px solid #262a33;border-radius:12px;
   padding:12px;margin:12px
