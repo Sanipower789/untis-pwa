@@ -163,14 +163,16 @@ function buildGrid(lessons) {
                 : l.status==="aenderung" ? "🟦 Änderung" : "";
 
     card.innerHTML = `
-      <div class="lesson-title">${l.subject || "—"}</div>
-      <div class="lesson-meta">
-        ${l.room ? ` · ${l.room}` : ""}
-        ${l.teacher ? ` · ${l.teacher}` : ""}
-      </div>
-      ${badge ? `<div class="badge">${badge}</div>` : ""}
-      ${l.note ? `<div class="note">${l.note}</div>` : ""}
-    `;
+    <div class="lesson-title">${l.subject || "—"}</div>
+    <div class="lesson-meta">
+      <span>${l.start}–${l.end}</span>
+      ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
+      ${l.room ? `<span>· ${l.room}</span>` : ""}
+    </div>
+    ${badge ? `<div class="badge">${badge}</div>` : ""}
+    ${l.note ? `<div class="note">${l.note}</div>` : ""}
+  `;
+
     grid.appendChild(card);
   }
 
