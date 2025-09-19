@@ -2,130 +2,130 @@
   --bg:#0f0f10; --card:#1c1d22; --ink:#f2f3f5; --muted:#a7aab1;
   --grid:#333842; --brand:#6a1b9a; --btn:#1976d2;
 }
+
 *{box-sizing:border-box}
 html,body{
   margin:0;
   background:var(--bg);
   color:var(--ink);
-  font-family:system-ui,Segoe UI,Roboto,Arial
+  font-family:system-ui, Segoe UI, Roboto, Arial, sans-serif;
 }
+
+/* ===== Top bar / general ===== */
 header{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  padding:12px 14px;
-  background:var(--brand)
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 14px;background:var(--brand)
 }
 h1{margin:0;font-size:20px}
-h2{margin:.2rem 0 0.6rem}
+h2{margin:.2rem 0 .6rem}
 button{
-  background:var(--btn);
-  color:#fff;
-  border:0;
-  border-radius:8px;
-  padding:8px 12px;
-  font-weight:600
+  background:var(--btn);color:#fff;border:0;border-radius:10px;
+  padding:8px 12px;font-weight:700
 }
 .card{
-  background:#17181d;
-  border:1px solid #262a33;
-  border-radius:12px;
-  padding:12px;
-  margin:12px
+  background:#17181d;border:1px solid #262a33;border-radius:12px;
+  padding:12px;margin:12px
 }
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .muted{color:var(--muted);margin:.4rem 0}
 
-/* Install-Gate */
-.gate{
-  position:fixed;
-  inset:0;
-  background:rgba(0,0,0,.85);
-  display:none;
-  align-items:center;
-  justify-content:center;
-  z-index:50
-}
-.gate-card{
-  background:#14151a;
-  border:1px solid #2a2f39;
-  border-radius:14px;
-  padding:16px;
-  max-width:520px;
-  margin:12px
-}
+/* ===== Install gate ===== */
+.gate{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:50}
+.gate-card{background:#14151a;border:1px solid #2a2f39;border-radius:14px;padding:16px;max-width:520px;margin:12px}
 
-/* Kursliste */
+/* ===== Course list ===== */
 .courses{columns:2;column-gap:18px}
 @media(min-width:640px){.courses{columns:3}}
 .chk{break-inside:avoid;display:block;margin:6px 0}
 
-/* Stundenplan */
+/* ===== Timetable ===== */
 #timetable{padding:12px}
+
+/* grid: time col + 5 day cols; compact row height like Untis */
 .grid{
-  position:relative;
   display:grid;
-  grid-template-columns:72px repeat(5, 1fr);
-  grid-auto-rows:auto;
+  grid-template-columns: 70px repeat(5, minmax(62px, 1fr));
+  grid-auto-rows: 64px;              /* slot height */
   border:1px solid var(--grid);
   border-radius:12px;
   overflow:hidden;
+  background:#0f1014;
 }
+
+.timecell.break,
+.slot.break {
+  height:36px !important;
+  min-height:36px !important;
+}
+
+/* headers & separators */
 .hdr, .timecell, .slot{border-bottom:1px solid var(--grid)}
 .hdr{
-  background:#15161b;
-  font-weight:800;
-  text-align:center;
-  padding:8px;
-  border-right:1px solid var(--grid)
+  background:#15161b;font-weight:800;text-align:center;
+  padding:8px;border-right:1px solid var(--grid)
 }
 .corner{grid-column:1;grid-row:1}
 
-/* Zeitspalte */
+/* time column */
 .timecell{
   color:var(--muted);
-  font-size:12px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
+  font-size:12px;line-height:1.2;
+  display:flex;align-items:center;justify-content:center;
   border-right:1px solid var(--grid);
   background:#0f1014;
-  height:var(--rowh,72px);
-  min-height:var(--rowh,72px);
+  padding:0 4px;
 }
 
-/* leere Kästchen */
+/* empty cells (the grid background) */
 .slot{
   border-right:1px solid var(--grid);
   background:#0f1014;
-  position:relative;
-  height:var(--rowh,72px);
-  min-height:var(--rowh,72px);
+  position: relative;               /* <<< anchor for lesson cards */
 }
 
-/* Pause = halb so hoch */
-.timecell.break, .slot.break{ --rowh:36px }
-
-/* Lesson-Karten */
+/* ===== Lesson cards (compact) ===== */
 .lesson{
-  position:absolute;
-  inset:4px;
-  border-radius:10px;
-  padding:7px;
-  background:#23252d;
-  color:#fff;
+  position: relative;
+  margin: var(--cell-margin);
+  border-radius: var(--card-radius);
+  padding: var(--card-pad);
+  background:#23252d; color:#fff;
   box-shadow:0 0 0 1px #3a4050 inset;
-  display:flex;
-  flex-direction:column;
-  gap:3px;
-  font-size:12px;
-  line-height:1.15
+  display:flex; flex-direction:column; gap: var(--card-gap);
+  font-size: var(--font-base); line-height:1.15;
+  max-width: calc(100% - (var(--cell-margin) * 2));
+  max-height: calc(100% - (var(--cell-margin) * 2));
+  overflow:hidden;
 }
+
 .lesson.entfaellt{background:#b71c1c}
 .lesson.vertretung{background:#f57c00}
 .lesson.aenderung{background:#1e88e5}
 
-.lesson-title{font-weight:800}
-.lesson-meta{font-size:11px;opacity:.92}
-.badge{font-size:11px;margin-top:2px}
-.note{font-size:10px;opacity:.9}
+.lesson-title{
+  font-weight:800;
+  font-size: var(--font-title);
+  white-space: nowrap;           /* <- bleibt eine Zeile */
+  overflow: hidden;
+  text-overflow: ellipsis;       /* <- … wenn zu lang */
+  letter-spacing: .2px;
+}
+
+.lesson-meta,
+.badge,
+.note{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* ===== Mobile tweaks ===== */
+@media (max-width: 425px){
+  .grid{
+    grid-template-columns: 68px repeat(5, minmax(60px, 1fr));
+    grid-auto-rows: 62px;
+  }
+  .timecell{font-size:11px}
+  .lesson{font-size:11px;padding:6px}
+  .lesson-title{font-size:11.5px}
+  .lesson-meta{font-size:10.5px}
+}
