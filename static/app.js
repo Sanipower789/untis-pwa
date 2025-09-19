@@ -124,7 +124,7 @@ function buildGrid(lessons) {
   }
 
   // Time rows & empty slots
-for (let i = 0; i < times.length - 1; i++) {
+  for (let i = 0; i < times.length - 1; i++) {
   const startM = times[i];
   const endM = times[i+1];
   const duration = endM - startM;
@@ -223,5 +223,3 @@ document.addEventListener("DOMContentLoaded", ()=>{
   // bei Rückkehr in den Tab sofort aktualisieren
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });
-
-/* ====== gITHUB ====== */
