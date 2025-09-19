@@ -96,6 +96,18 @@ function buildGrid(lessons) {
   const wrap = document.getElementById("timetable");
   wrap.innerHTML = "";
 
+  // In buildGrid, wo timeCell + slot erzeugt werden:
+  const isBreak = (fmtHM(times[i]) === "08:55" && fmtHM(times[i+1]) === "09:10")
+              || (fmtHM(times[i]) === "10:10" && fmtHM(times[i+1]) === "10:20")
+              || (fmtHM(times[i]) === "11:20" && fmtHM(times[i+1]) === "11:45")              
+              || (fmtHM(times[i]) === "12:45" && fmtHM(times[i+1]) === "12:55")
+              || (fmtHM(times[i]) === "13:55" && fmtHM(times[i+1]) === "13:25")              
+              ;
+
+  timeCell.className = "timecell" + (isBreak ? " break" : "");
+  slot.className = "slot" + (isBreak ? " break" : "");
+
+
   // nur Mo–Fr
   const tset = new Set();
   const valid = [];

@@ -52,6 +52,12 @@ button{
   background:#0f1014;
 }
 
+.timecell.break,
+.slot.break {
+  height:36px !important;
+  min-height:36px !important;
+}
+
 /* headers & separators */
 .hdr, .timecell, .slot{border-bottom:1px solid var(--grid)}
 .hdr{
