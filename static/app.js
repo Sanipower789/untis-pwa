@@ -223,3 +223,5 @@ document.addEventListener("DOMContentLoaded", ()=>{
   // bei Rückkehr in den Tab sofort aktualisieren
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });
+
+/* ====== gITHUB ====== */
