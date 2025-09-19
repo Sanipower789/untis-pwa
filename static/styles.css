@@ -79,18 +79,16 @@ button{
 
 /* ===== Lesson cards (compact) ===== */
 .lesson{
-  position: relative;               /* sit inside the grid cell */
-  margin: 4px;                      /* space to cell borders */
-  border-radius:10px;
-  padding:7px 8px;
-  background:#23252d;color:#fff;
+  position: relative;
+  margin: var(--cell-margin);
+  border-radius: var(--card-radius);
+  padding: var(--card-pad);
+  background:#23252d; color:#fff;
   box-shadow:0 0 0 1px #3a4050 inset;
-  display:flex;flex-direction:column;gap:3px;
-  font-size:12px;line-height:1.15;
-
-  /* prevent cards from stretching / overflowing */
-  max-width: calc(100% - 2px);
-  max-height: calc(100% - 2px);
+  display:flex; flex-direction:column; gap: var(--card-gap);
+  font-size: var(--font-base); line-height:1.15;
+  max-width: calc(100% - (var(--cell-margin) * 2));
+  max-height: calc(100% - (var(--cell-margin) * 2));
   overflow:hidden;
 }
 
@@ -100,20 +98,25 @@ button{
 
 .lesson-title{
   font-weight:800;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size: var(--font-title);
+  white-space: nowrap;           /* <- bleibt eine Zeile */
+  overflow: hidden;
+  text-overflow: ellipsis;       /* <- … wenn zu lang */
+  letter-spacing: .2px;
 }
-.lesson-meta{
-  font-size:11px;opacity:.92;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-}
-.badge{font-size:11px;margin-top:2px;white-space:nowrap}
-.note{font-size:10px;opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+.lesson-meta,
+.badge,
+.note{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* ===== Mobile tweaks ===== */
-@media (max-width: 420px){
+@media (max-width: 425px){
   .grid{
-    grid-template-columns: 64px repeat(5, minmax(56px, 1fr));
-    grid-auto-rows: 58px;
+    grid-template-columns: 68px repeat(5, minmax(60px, 1fr));
+    grid-auto-rows: 62px;
   }
   .timecell{font-size:11px}
   .lesson{font-size:11px;padding:6px}
