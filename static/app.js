@@ -165,7 +165,6 @@ function buildGrid(lessons) {
     card.innerHTML = `
       <div class="lesson-title">${l.subject || "—"}</div>
       <div class="lesson-meta">
-        ${l.start}–${l.end}
         ${l.room ? ` · ${l.room}` : ""}
         ${l.teacher ? ` · ${l.teacher}` : ""}
       </div>

@@ -42,14 +42,14 @@ button{
 #timetable{padding:12px}
 
 /* grid: time col + 5 day cols; compact row height like Untis */
-.grid{
+.grid {
+  position:relative;
   display:grid;
-  grid-template-columns: 70px repeat(5, minmax(62px, 1fr));
-  grid-auto-rows: 64px;              /* slot height */
+  grid-template-columns:72px repeat(5, 1fr);
+  grid-auto-rows:100px;   /* statt 72px -> 100px oder 120px für mehr Platz */
   border:1px solid var(--grid);
   border-radius:12px;
   overflow:hidden;
-  background:#0f1014;
 }
 
 /* headers & separators */
