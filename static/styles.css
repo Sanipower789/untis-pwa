@@ -23,11 +23,6 @@ button{
   padding:8px 12px;font-weight:700
 }
 
-/* Pausen kürzer darstellen */
-.breakcell {
-  grid-auto-rows: 36px !important; /* halb so hoch wie 72px Unterricht */
-}
-
 .card{
   background:#17181d;border:1px solid #262a33;border-radius:12px;
   padding:12px;margin:12px

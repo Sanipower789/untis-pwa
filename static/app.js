@@ -91,101 +91,115 @@ function buildCourseSelection(allLessons) {
   }
 }
 
-/* ====== Grid-Rendering ====== */
+// ===== Grid render (Untis-style) =====
 function buildGrid(lessons) {
-  const wrap = document.getElementById("timetable");
-  wrap.innerHTML = "";
+  const container = document.getElementById("timetable");
+  container.innerHTML = "";
 
-  // nur Mo–Fr
+  // Collect times & keep only Mon–Fri
   const tset = new Set();
   const valid = [];
-  for (const l of lessons) {
+  lessons.forEach(l => {
     const d = dayIdxISO(l.date);
-    if (d>=1 && d<=5) {
+    if (d >= 1 && d <= 5) {
       valid.push(l);
       tset.add(parseHM(l.start));
       tset.add(parseHM(l.end));
     }
-  }
+  });
   const times = [...tset].sort((a,b)=>a-b);
   if (times.length < 2) {
-    wrap.innerHTML = `<div class="card"><p class="muted">Keine Einträge.</p></div>`;
+    container.innerHTML = "<p class='muted'>Keine Einträge.</p>";
     return;
+  }
+
+  // Prepare per-row heights: normal slots 72px, breaks (<=20 min) 36px
+  const ROW_NORMAL = 72;
+  const ROW_BREAK  = 36;
+  const rowHeights = []; // one entry for every interval between times[i] -> times[i+1]
+  for (let i = 0; i < times.length - 1; i++) {
+    const duration = times[i+1] - times[i]; // minutes
+    rowHeights.push(duration <= 20 ? ROW_BREAK : ROW_NORMAL);
   }
 
   const grid = document.createElement("div");
   grid.className = "grid";
 
-  // Header
+  // make the grid use the rowHeights (first row is the header)
+  const headerH = 44;
+  grid.style.gridTemplateRows = [headerH + "px", ...rowHeights.map(h => h + "px")].join(" ");
+  // columns stay the same (time + 5 weekdays)
+  grid.style.gridTemplateColumns = "72px repeat(5, 1fr)";
+
+  // Header row
   const corner = document.createElement("div");
-  corner.className = "hdr corner"; corner.textContent = "Zeit"; grid.appendChild(corner);
-  for (let d=1; d<=5; d++){
-    const h=document.createElement("div"); h.className="hdr day"; h.textContent=WEEKDAYS[d-1]; grid.appendChild(h);
-  }
-
-  // Time rows & empty slots
-  for (let i = 0; i < times.length - 1; i++) {
-  const startM = times[i];
-  const endM = times[i+1];
-  const duration = endM - startM;
-
-  const timeCell = document.createElement("div");
-  timeCell.className = "timecell";
-  if (duration <= 20) {
-    timeCell.classList.add("breakcell");
-  }
-  timeCell.textContent = `${fmtHM(startM)}–${fmtHM(endM)}`;
-  timeCell.style.gridColumn = "1";
-  timeCell.style.gridRow = String(i + 2);
-  grid.appendChild(timeCell);
-
+  corner.className = "hdr corner";
+  corner.textContent = "Zeit";
+  grid.appendChild(corner);
   for (let d = 1; d <= 5; d++) {
-    const slot = document.createElement("div");
-    slot.className = "slot";
-    if (duration <= 20) {
-      slot.classList.add("breakcell");
-    }
-    slot.style.gridColumn = String(d + 1);
-    slot.style.gridRow = String(i + 2);
-    grid.appendChild(slot);
+    const h = document.createElement("div");
+    h.className = "hdr day";
+    h.textContent = WEEKDAYS[d-1];
+    grid.appendChild(h);
   }
-}
 
-  const rowIndexFor = (m) => {
-    for (let i=0;i<times.length;i++) if (times[i]===m) return i;
-    const idx = times.findIndex(t=>t>m);
-    return Math.max(0, idx-1);
+  // Time rows + empty slots
+  for (let i = 0; i < times.length - 1; i++) {
+    const startM = times[i];
+    const endM   = times[i+1];
+
+    const timeCell = document.createElement("div");
+    timeCell.className = "timecell";
+    timeCell.textContent = `${fmtHM(startM)}–${fmtHM(endM)}`;
+    timeCell.style.gridColumn = "1";
+    timeCell.style.gridRow = String(i + 2);
+    grid.appendChild(timeCell);
+
+    for (let d = 1; d <= 5; d++) {
+      const slot = document.createElement("div");
+      slot.className = "slot";
+      slot.style.gridColumn = String(d + 1);
+      slot.style.gridRow = String(i + 2);
+      grid.appendChild(slot);
+    }
+  }
+
+  const rowIndexFor = (mins) => {
+    for (let i = 0; i < times.length; i++) if (times[i] === mins) return i;
+    const idx = times.findIndex(t => t > mins);
+    return Math.max(0, idx - 1);
   };
 
-  // place lessons
-  for (const l of valid){
+  // Place lessons
+  valid.forEach(l => {
     const day = dayIdxISO(l.date);
     const s = parseHM(l.start), e = parseHM(l.end);
     const r0 = rowIndexFor(s), r1 = rowIndexFor(e);
+    const span = Math.max(1, r1 - r0);
 
     const card = document.createElement("div");
     card.className = `lesson ${l.status}`;
-    card.style.gridColumn = String(day+1);
-    card.style.gridRow    = `${r0+2} / ${r1+2}`;
+    card.style.gridColumn = String(day + 1);
+    card.style.gridRow = `${r0 + 2} / span ${span}`;
 
-    const badge = l.status==="entfaellt" ? "🟥 Entfällt"
-                : l.status==="vertretung" ? "⚠️ Vertretung"
-                : l.status==="aenderung" ? "🟦 Änderung" : "";
+    const badge =
+      l.status === "entfaellt" ? "🟥 Entfällt" :
+      l.status === "vertretung" ? "⚠️ Vertretung" :
+      l.status === "aenderung" ? "🟦 Änderung" : "";
 
     card.innerHTML = `
-    <div class="lesson-title">${l.subject || "—"}</div>
-    <div class="lesson-meta">
-      ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
-      ${l.room ? `<span>· ${l.room}</span>` : ""}
-    </div>
-    ${badge ? `<div class="badge">${badge}</div>` : ""}
-    ${l.note ? `<div class="note">${l.note}</div>` : ""}
-  `;
-
+      <div class="lesson-title">${l.subject || "—"}</div>
+      <div class="lesson-meta">
+        ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
+        ${l.room ? `<span>· ${l.room}</span>` : ""}
+      </div>
+      ${badge ? `<div class="badge">${badge}</div>` : ""}
+      ${l.note ? `<div class="note">${l.note}</div>` : ""}
+    `;
     grid.appendChild(card);
-  }
+  });
 
-  wrap.appendChild(grid);
+  container.appendChild(grid);
 }
 
 /* ====== Fetch + Auto-Refresh ====== */
