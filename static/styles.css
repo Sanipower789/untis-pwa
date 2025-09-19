@@ -50,6 +50,11 @@ button{
   border:1px solid var(--grid);
   border-radius:12px;
   overflow:hidden;
+
+  /* prevent cards from stretching / overflowing */
+  max-width: calc(100% - 12px);
+  max-height: calc(100% - 12px);
+  overflow:hidden;
 }
 
 /* headers & separators */
