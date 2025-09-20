@@ -1,195 +1,148 @@
-from flask import send_from_directory, request
-import os, json
-from datetime import date, timedelta
+import os
+from pathlib import Path
+from datetime import datetime, timedelta, date
+from typing import Optional, Dict, Any
 from flask import (
-    Flask, request, jsonify, session, redirect, url_for, render_template
+    Flask, request, jsonify, session, redirect, url_for, send_file
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# ---- Untis Fetch ----
-from untis_client import fetch_week
+# --- Flask App ---
+app = Flask(__name__)
+# sichere Secret-Key-Quelle bevorzugen, ansonsten Fallback (später in Render/Deta als SECRET_KEY setzen)
+app.secret_key = os.getenv("SECRET_KEY", "dev-change-me-please-123")
 
-# Flask so konfigurieren, dass Templates auch im Projekt-Root gefunden werden
-app = Flask(__name__, static_folder="static")
-app.secret_key = os.getenv("SECRET_KEY", "dev-only-change-me")
+# --- Robust HTML-Serving (templates ODER Projektrouterlaubt) ---
+ROOT = Path(__file__).resolve().parent
 
-USERS_FILE = os.getenv("USERS_FILE", "users.json")
-
-
-# ---------- Helpers ----------
-def load_users() -> dict:
-    if not os.path.exists(USERS_FILE):
-        return {}
-    try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def save_users(users: dict) -> None:
-    tmp = USERS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, USERS_FILE)
-
-def current_user() -> str | None:
-    return session.get("user")
-
-
-# ---------- Login-Gate (Auto-Redirect) ----------
-PUBLIC_PATHS = {
-    "/", "/login", "/api/login", "/api/register",
-    "/favicon.ico",
-}
-# alles unter /static/ ist öffentlich
-def _is_public_path(path: str) -> bool:
-    if path in PUBLIC_PATHS: 
-        return True
-    return path.startswith("/static/")
-
-@app.before_request
-def require_login():
-    # PWA-Service-Worker und Manifest dürfen auch ohne Login kommen
-    if _is_public_path(request.path):
-        return None
-    if current_user() is None:
-        # GET -> Redirect auf /login (mit Rücksprungziel)
-        if request.method == "GET":
-            nxt = request.path or "/"
-            if request.query_string:
-                nxt += "?" + request.query_string.decode("utf-8")
-            return redirect(url_for("page_login", next=nxt))
-        # API-Calls -> 401 JSON
-        return jsonify({"ok": False, "error": "auth_required"}), 401
+def _html_path(filename: str) -> Optional[Path]:
+    for p in (ROOT / "templates" / filename, ROOT / filename):
+        if p.exists():
+            return p
     return None
 
+def _serve_html(filename: str):
+    p = _html_path(filename)
+    if not p:
+        return f"{filename} not found (looked in /templates and project root)", 500
+    return send_file(p)
 
-# ---------- Pages ----------
+# --- Fake-Persistence (RAM) -> später Deta Base ---
+USERS: Dict[str, Dict[str, Any]] = {}
+USERDATA: Dict[str, Dict[str, Any]] = {}  # z.B. {"courses":[...], "name":"..."}
+
+def current_user() -> Optional[str]:
+    return session.get("user")
+
+# --- Untis Import (falls vorhanden) ---
+try:
+    from untis_client import fetch_week  # deine bestehende Funktion
+except Exception:
+    fetch_week = None
+
+# ---------- ROUTES: Seiten ----------
+
 @app.get("/")
 def home():
-    if not session.get("user"):
-        # keep your login gate
-        nxt = request.full_path if request.full_path and request.full_path != "/" else "/"
-        return redirect(url_for("page_login", next=nxt))
-    return send_from_directory(app.root_path, "index.html")
+    # Wenn nicht eingeloggt -> Login
+    if not current_user():
+        return redirect(url_for("page_login"))
+    # Eingeloggt -> index.html rendern
+    return _serve_html("index.html")
 
 @app.get("/login")
 def page_login():
-    return send_from_directory(app.root_path, "login.html")
+    return _serve_html("login.html")
 
-# ---------- Auth API ----------
+# ---------- ROUTES: Auth-API ----------
+
 @app.post("/api/register")
 def api_register():
-    data = request.get_json(force=True, silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", "")).strip()
     if not username or not password:
-        return jsonify({"ok": False, "error": "missing_fields"}), 400
-
-    users = load_users()
-    if username in users:
-        return jsonify({"ok": False, "error": "user_exists"}), 409
-
-    users[username] = {
-        "password": generate_password_hash(password),
-        "name": "",
-        "courses": [],  # Liste von Fächern
+        return jsonify(ok=False, error="missing_fields"), 400
+    if username in USERS:
+        return jsonify(ok=False, error="exists"), 409
+    USERS[username] = {
+        "pw": generate_password_hash(password),
+        "created": datetime.utcnow().isoformat()
     }
-    save_users(users)
-    return jsonify({"ok": True})
+    USERDATA.setdefault(username, {"courses": [], "name": ""})
+    return jsonify(ok=True)
 
 @app.post("/api/login")
 def api_login():
-    data = request.get_json(force=True, silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-
-    users = load_users()
-    user = users.get(username)
-    if not user or not check_password_hash(user.get("password", ""), password):
-        return jsonify({"ok": False, "error": "invalid_credentials"}), 401
-
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", "")).strip()
+    u = USERS.get(username)
+    if not u or not check_password_hash(u["pw"], password):
+        return jsonify(ok=False, error="invalid"), 401
     session["user"] = username
-    return jsonify({"ok": True, "user": username})
+    # Lebensdauer 30 Tage
+    session.permanent = True
+    app.permanent_session_lifetime = timedelta(days=30)
+    return jsonify(ok=True)
 
 @app.post("/api/logout")
 def api_logout():
-    session.clear()
-    return jsonify({"ok": True})
+    session.pop("user", None)
+    return jsonify(ok=True)
 
 @app.get("/api/me")
 def api_me():
-    u = current_user()
-    if not u:
-        return jsonify({"ok": False, "user": None})
-    users = load_users()
-    me = users.get(u, {})
-    return jsonify({
-        "ok": True,
-        "user": u,
-        "name": me.get("name", ""),
-        "courses": me.get("courses", []),
-    })
+    user = current_user()
+    return jsonify(ok=True, user=user)
 
+# ---------- ROUTES: User-Daten (Kursauswahl etc.) ----------
 
-# ---------- Nutzer-Daten (Name + Kurse) ----------
-@app.get("/api/user/courses")
-def get_user_courses():
-    u = current_user()
-    users = load_users()
-    me = users.get(u, {})
-    return jsonify({
-        "ok": True,
-        "name": me.get("name", ""),
-        "courses": me.get("courses", []),
-    })
+@app.get("/api/user/data")
+def api_user_data_get():
+    user = current_user()
+    if not user:
+        return jsonify(ok=False, error="unauth"), 401
+    return jsonify(ok=True, data=USERDATA.get(user, {"courses": [], "name": ""}))
 
-@app.post("/api/user/courses")
-def set_user_courses():
-    data = request.get_json(force=True, silent=True) or {}
-    name = (data.get("name") or "").strip()
+@app.post("/api/user/data")
+def api_user_data_set():
+    user = current_user()
+    if not user:
+        return jsonify(ok=False, error="unauth"), 401
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", ""))[:64]
     courses = data.get("courses") or []
+    if not isinstance(courses, list):
+        return jsonify(ok=False, error="bad_payload"), 400
+    USERDATA[user] = {"name": name, "courses": courses}
+    return jsonify(ok=True)
 
-    u = current_user()
-    users = load_users()
-    if u not in users:
-        return jsonify({"ok": False, "error": "user_missing"}), 400
+# ---------- ROUTES: Timetable ----------
 
-    users[u]["name"] = name
-    # nur Strings zulassen
-    users[u]["courses"] = [str(c) for c in courses][:12]
-    save_users(users)
-    return jsonify({"ok": True})
-
-
-# ---------- Timetable API ----------
 @app.get("/api/timetable")
 def api_timetable():
+    # erlaubt auch ungeloggt, falls du es willst -> andernfalls blocken
     today = date.today()
-    week_start = today - timedelta(days=today.weekday())  # Montag
-
-    lessons = None
-    # 1) Versuche lokales Mapping zu liefern
+    # Montag der Woche
+    week_start = today - timedelta(days=today.weekday())
+    if fetch_week is None:
+        # Fallback: leere Liste (wenn untis_client fehlt)
+        return jsonify(weekStart=str(week_start), lessons=[])
     try:
-        if os.path.exists("lessons_mapped.json"):
-            with open("lessons_mapped.json", "r", encoding="utf-8") as f:
-                lessons = json.load(f)
+        lessons = fetch_week(week_start)  # <- deine bestehende Funktion
     except Exception as e:
-        print("⚠️ lessons_mapped.json konnte nicht geladen werden:", e)
+        return jsonify(ok=False, error=str(e), lessons=[]), 500
+    return jsonify(weekStart=str(week_start), lessons=lessons)
 
-    # 2) Fallback: Live von Untis
-    if not lessons:
-        try:
-            lessons = fetch_week(week_start)
-        except Exception as e:
-            print("⚠️ fetch_week Fehlgeschlagen:", e)
-            lessons = []
+# ---------- Debug / Health ----------
 
-    return jsonify({"weekStart": str(week_start), "lessons": lessons})
+@app.get("/api/health")
+def api_health():
+    return jsonify(ok=True, time=datetime.utcnow().isoformat())
 
+# ---------- Run ----------
 
-# ---------- Main ----------
 if __name__ == "__main__":
-    # Für lokales Debuggen
+    # Lokales Debug
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
