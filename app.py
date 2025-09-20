@@ -1,4 +1,4 @@
-from flask import send_from_directory
+from flask import send_from_directory, request
 import os, json
 from datetime import date, timedelta
 from flask import (
@@ -67,13 +67,15 @@ def require_login():
 # ---------- Pages ----------
 @app.get("/")
 def home():
-    # serve ./index.html from the repo root
-    return send_from_directory(".", "index.html")
+    if not session.get("user"):
+        # keep your login gate
+        nxt = request.full_path if request.full_path and request.full_path != "/" else "/"
+        return redirect(url_for("page_login", next=nxt))
+    return send_from_directory(app.root_path, "index.html")
 
 @app.get("/login")
 def page_login():
-    # serve ./login.html from the repo root
-    return send_from_directory(".", "login.html")
+    return send_from_directory(app.root_path, "login.html")
 
 # ---------- Auth API ----------
 @app.post("/api/register")
