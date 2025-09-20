@@ -1,3 +1,4 @@
+from flask import send_from_directory
 import os, json
 from datetime import date, timedelta
 from flask import (
@@ -9,7 +10,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from untis_client import fetch_week
 
 # Flask so konfigurieren, dass Templates auch im Projekt-Root gefunden werden
-app = Flask(__name__, template_folder=".", static_folder="static")
+app = Flask(__name__, static_folder="static")
 app.secret_key = os.getenv("SECRET_KEY", "dev-only-change-me")
 
 USERS_FILE = os.getenv("USERS_FILE", "users.json")
@@ -66,13 +67,13 @@ def require_login():
 # ---------- Pages ----------
 @app.get("/")
 def home():
-    # wenn eingeloggt, direkt Index anzeigen; ansonsten fängt before_request ab
-    return render_template("index.html")
+    # serve ./index.html from the repo root
+    return send_from_directory(".", "index.html")
 
 @app.get("/login")
 def page_login():
-    return render_template("login.html")
-
+    # serve ./login.html from the repo root
+    return send_from_directory(".", "login.html")
 
 # ---------- Auth API ----------
 @app.post("/api/register")
