@@ -237,3 +237,142 @@ document.addEventListener("DOMContentLoaded", ()=>{
   // bei Rückkehr in den Tab sofort aktualisieren
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });
+
+// ======================
+// AUTH & PROFILE (ADDON)
+// ======================
+
+// Kleine Hilfen
+async function apiJSON(url, opts = {}) {
+  const r = await fetch(url, Object.assign({ credentials: 'same-origin' }, opts));
+  if (!r.ok) throw new Error((await r.text()) || (r.statusText));
+  return await r.json();
+}
+async function tryApiJSON(url, opts = {}) {
+  try { return await apiJSON(url, opts); } catch { return null; }
+}
+
+// Zustand
+const Auth = {
+  user: null,
+  async refreshMe() {
+    const me = await tryApiJSON('/api/me');
+    this.user = (me && me.user) || null;
+    this.reflectUI();
+    return this.user;
+  },
+  reflectUI() {
+    // Login/Logout-Knöpfe einbauen oder anpassen
+    const header = document.querySelector('header');
+    if (!header) return;
+
+    let btnLogin = document.getElementById('btn-login');
+    let btnLogout = document.getElementById('btn-logout');
+
+    if (!btnLogin) {
+      btnLogin = document.createElement('a');
+      btnLogin.id = 'btn-login';
+      btnLogin.href = '/login';
+      btnLogin.textContent = 'Login';
+      btnLogin.style.marginLeft = '8px';
+      btnLogin.className = 'button-like';
+      header.appendChild(btnLogin);
+    }
+    if (!btnLogout) {
+      btnLogout = document.createElement('button');
+      btnLogout.id = 'btn-logout';
+      btnLogout.textContent = 'Logout';
+      btnLogout.style.marginLeft = '8px';
+      btnLogout.style.display = 'none';
+      header.appendChild(btnLogout);
+      btnLogout.onclick = async () => {
+        await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+        this.user = null;
+        this.reflectUI();
+        // Beim Logout weiter mit localStorage arbeiten
+        if (typeof loadTimetable === 'function') loadTimetable(true);
+      };
+    }
+
+    if (this.user) {
+      btnLogin.style.display = 'none';
+      btnLogout.style.display = '';
+      btnLogout.title = `Angemeldet als ${this.user}`;
+    } else {
+      btnLogin.style.display = '';
+      btnLogout.style.display = 'none';
+    }
+  }
+};
+
+// Server-Kurse speichern/holen – falls nicht vorhanden, fallback auf localStorage
+const LS_COURSES = "myCourses";
+const LS_NAME = "myName";
+
+async function saveCoursesServer(name, courses) {
+  const res = await tryApiJSON('/api/user/courses', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ name, courses })
+  });
+  return !!res;
+}
+
+async function loadCoursesServer() {
+  const res = await tryApiJSON('/api/user/courses', { credentials: 'same-origin' });
+  return res && res.ok ? { name: res.name || "", courses: res.courses || [] } : null;
+}
+
+// Hook in bestehende UI (wenn vorhanden): Beim Speichern der Kurse zuerst Server probieren
+(function augmentCourseSelection() {
+  const saveBtn = document.getElementById('save-courses');
+  if (!saveBtn || saveBtn.dataset.authAugmented) return;
+  saveBtn.dataset.authAugmented = '1';
+
+  saveBtn.addEventListener('click', async () => {
+    // existierende Logik liest normalerweise Kurse aus DOM – hier nur Zusatz:
+    const nameInput = document.getElementById('profile-name');
+    const name = nameInput ? (nameInput.value || '').trim() : (localStorage.getItem(LS_NAME) || '');
+    const selected = Array.from(document.querySelectorAll('#courses input[type=checkbox]:checked')).map(i => i.value).slice(0, 12);
+
+    // 1) Wenn eingeloggt → Server speichern, sonst Speicher lokal
+    const loggedIn = !!Auth.user;
+    if (loggedIn) {
+      const ok = await saveCoursesServer(name, selected);
+      if (!ok) {
+        // Fallback local
+        localStorage.setItem(LS_NAME, name);
+        localStorage.setItem(LS_COURSES, JSON.stringify(selected));
+      }
+    } else {
+      localStorage.setItem(LS_NAME, name);
+      localStorage.setItem(LS_COURSES, JSON.stringify(selected));
+    }
+
+    // Danach Liste neu zeichnen (nutzt deine vorhandene Funktion)
+    if (typeof loadTimetable === 'function') loadTimetable(true);
+  }, { capture: true });
+})();
+
+// Beim Start: Session prüfen und ggf. Kurse vom Server laden (ohne was kaputt zu machen)
+document.addEventListener('DOMContentLoaded', async () => {
+  await Auth.refreshMe();
+
+  if (Auth.user) {
+    const remote = await loadCoursesServer();
+    if (remote) {
+      // lokale Werte updaten, damit restlicher Code (der localStorage nutzt) weiterhin funktioniert
+      localStorage.setItem(LS_NAME, remote.name || '');
+      localStorage.setItem(LS_COURSES, JSON.stringify(remote.courses || []));
+      if (typeof loadTimetable === 'function') loadTimetable(true);
+    }
+  }
+});
+
+// kleine Optik für Login-Link
+(function injectAuthStyle() {
+  const s = document.createElement('style');
+  s.textContent = `.button-like{background:#1976d2;color:#fff !important;padding:8px 12px;border-radius:8px;text-decoration:none;font-weight:600}`;
+  document.head.appendChild(s);
+})();

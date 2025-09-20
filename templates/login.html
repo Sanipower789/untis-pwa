@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Login · Mein Stundenplan</title>
+  <link rel="manifest" href="/static/manifest.json" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <meta name="theme-color" content="#6a1b9a" />
+  <style>
+    .auth-wrap{max-width:520px;margin:28px auto;padding:16px}
+    .auth-card{background:#17181d;border:1px solid #262a33;border-radius:14px;padding:18px}
+    .tabs{display:flex;gap:8px;margin-bottom:12px}
+    .tabs button{background:#2a2d36;border:1px solid #3a3f4b;color:#fff;padding:8px 12px;border-radius:8px;cursor:pointer}
+    .tabs button.active{background:#1976d2}
+    .field{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+    .field input{background:#0f1014;border:1px solid #2b2f3a;color:#fff;border-radius:8px;padding:10px}
+    .help{color:#a7aab1;font-size:13px;margin-top:8px}
+    .err{color:#ff7676;margin-top:10px;font-size:14px}
+    .ok{color:#7CFC9A;margin-top:10px;font-size:14px}
+    .actions{display:flex;gap:8px;align-items:center;margin-top:14px}
+    a.minilink{color:#a7aab1;text-decoration:underline}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Login</h1>
+  </header>
+
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="tabs">
+        <button id="tabLogin" class="active">Einloggen</button>
+        <button id="tabReg">Registrieren</button>
+      </div>
+
+      <form id="formLogin">
+        <div class="field">
+          <label>Nutzername</label>
+          <input id="loginUser" required autocomplete="username" />
+        </div>
+        <div class="field">
+          <label>Passwort</label>
+          <input id="loginPass" type="password" required autocomplete="current-password" />
+        </div>
+        <div class="actions">
+          <button type="submit">Einloggen</button>
+          <a class="minilink" href="/">Zurück</a>
+        </div>
+        <div id="loginMsg" class="err" style="display:none"></div>
+      </form>
+
+      <form id="formReg" style="display:none">
+        <div class="field">
+          <label>Nutzername</label>
+          <input id="regUser" required autocomplete="username" />
+        </div>
+        <div class="field">
+          <label>Passwort</label>
+          <input id="regPass" type="password" required autocomplete="new-password" />
+        </div>
+        <div class="help">Merke dir deinen Namen &amp; dein Passwort – damit kannst du dich auf mehreren Geräten anmelden.</div>
+        <div class="actions">
+          <button type="submit">Account erstellen</button>
+          <a class="minilink" href="/">Zurück</a>
+        </div>
+        <div id="regMsg" class="err" style="display:none"></div>
+        <div id="regOk" class="ok" style="display:none">Account erstellt. Du kannst dich nun einloggen.</div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const tabLogin = document.getElementById('tabLogin');
+    const tabReg = document.getElementById('tabReg');
+    const formLogin = document.getElementById('formLogin');
+    const formReg = document.getElementById('formReg');
+
+    tabLogin.onclick = () => {
+      tabLogin.classList.add('active'); tabReg.classList.remove('active');
+      formLogin.style.display = ''; formReg.style.display = 'none';
+    };
+    tabReg.onclick = () => {
+      tabReg.classList.add('active'); tabLogin.classList.remove('active');
+      formReg.style.display = ''; formLogin.style.display = 'none';
+    };
+
+    formLogin.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = { username: loginUser.value.trim(), password: loginPass.value };
+      const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      if (!r.ok) {
+        const j = await r.json().catch(()=>({error:'Fehler'}));
+        loginMsg.textContent = j.error || 'Login fehlgeschlagen';
+        loginMsg.style.display = 'block';
+        return;
+      }
+      window.location.href = '/';
+    });
+
+    formReg.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      regMsg.style.display = 'none'; regOk.style.display = 'none';
+      const body = { username: regUser.value.trim(), password: regPass.value };
+      const r = await fetch('/api/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      if (!r.ok) {
+        const j = await r.json().catch(()=>({error:'Fehler'}));
+        regMsg.textContent = j.error || 'Registrierung fehlgeschlagen';
+        regMsg.style.display = 'block';
+        return;
+      }
+      regOk.style.display = 'block';
+      setTimeout(()=>{ tabLogin.click(); }, 800);
+    });
+  </script>
+</body>
+</html>
