@@ -6,8 +6,30 @@ from flask import Flask, request, jsonify, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, render_template
 import json, os
+from flask import render_template, redirect, url_for, session, jsonify
 
 app = Flask(__name__)
+
+# ---- redirect root to login if not authenticated
+@app.route("/")
+def home():
+    if not session.get("user"):
+        # optional next param so we can come back here after login
+        return redirect(url_for("login", next="/"))
+    return render_template("index.html")
+
+# keep your existing /login view; if you don't have one, add:
+@app.route("/login")
+def login():
+    return render_template("login.html")
+
+# small helper for the frontend to know if we're logged in
+@app.get("/api/me")
+def api_me():
+    u = session.get("user")
+    if not u:
+        return jsonify({"ok": False}), 401
+    return jsonify({"ok": True, "user": u})
 
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
 

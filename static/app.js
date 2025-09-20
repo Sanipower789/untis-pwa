@@ -28,6 +28,23 @@ const isStandalone = () =>
   }
 })();
 
+// --- session guard: if not logged in, go to /login
+(async () => {
+  try {
+    const r = await fetch("/api/me", { credentials: "same-origin" });
+    if (!r.ok) {
+      // carry on to login and come back
+      const next = encodeURIComponent(location.pathname + location.search);
+      location.replace(`/login?next=${next}`);
+      return;
+    }
+  } catch (_) {
+    // network issue -> show login just in case
+    location.replace("/login");
+    return;
+  }
+})();
+
 /* ====== LocalStorage ====== */
 const LS_COURSES = "myCourses";      // Array<String>
 const LS_NAME    = "myName";         // String
