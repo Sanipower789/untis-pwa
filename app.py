@@ -4,6 +4,7 @@ from flask import Flask, jsonify, render_template
 from untis_client import fetch_week
 from flask import Flask, request, jsonify, session
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask import Flask, render_template
 import json, os
 
 app = Flask(__name__)
@@ -69,6 +70,10 @@ def index():
 def api_timetable():
     today = date.today()
     week_start = today - timedelta(days=today.weekday())
+
+@app.route("/login")
+def login_page():
+    return render_template("login.html")
 
     lessons = None
 
