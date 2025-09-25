@@ -1,6 +1,6 @@
 import os, json
 from datetime import datetime, timedelta, date
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template,jsonify, request
 from untis_client import fetch_week
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, date
@@ -22,7 +22,7 @@ def api_timetable():
             return jsonify({"ok": False, "error": "bad weekStart"})  
     else:  
         today = datetime.now(ZoneInfo("Europe/Berlin")).date()
-        ws = today - timedelta(days=today.weekday())  **# Monday of THIS week (DE time)**   
+        ws = today - timedelta(days=today.weekday())  # Monday of THIS week (DE time)
   
     lessons = fetch_week(ws)  
   
