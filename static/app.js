@@ -204,7 +204,7 @@ function buildGrid(lessons) {
 
 /* ====== Fetch + Auto-Refresh ====== */
 async function loadTimetable(force=false){
-  const res = await fetch("/api/timetable", {cache:"no-store"});
+  const res = await fetch(`/api/timetable?ts=${Date.now()}`);  
   const data = await res.json();
   let lessons = data.lessons || [];
 
