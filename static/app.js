@@ -39,6 +39,32 @@ const parseHM = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
 const fmtHM = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
 const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
 
+// ---- mapping via lessons_mapped.json ----
+let COURSE_MAP = {}; // raw subject -> pretty subject
+let ROOM_MAP   = {}; // raw room    -> pretty room
+
+async function loadMapsOnce() {
+  if (Object.keys(COURSE_MAP).length || Object.keys(ROOM_MAP).length) return;
+  try {
+    const j = await fetch("/lessons_mapped.json?v=" + Date.now(), {cache:"no-store"}).then(r=>r.json());
+    if (Array.isArray(j)) {
+      for (const L of j) {
+        if (L.subject && L.subject_original) COURSE_MAP[L.subject] = L.subject_original;
+        if (L.room) {
+          // if your JSON already uses pretty room in L.room, this line will just be ROOM_MAP["A-K21"]="A-K21"
+          // if you also added a prettier field like room_pretty, prefer it:
+          const pretty = L.room_pretty || L.room_display || L.room;
+          ROOM_MAP[L.room] = pretty;
+        }
+      }
+    } else if (j && j.course && j.room) {
+      COURSE_MAP = j.course; ROOM_MAP = j.room;
+    }
+  } catch(e) { console.warn("map load failed", e); }
+}
+const mapCourse = raw => COURSE_MAP[raw] || raw || "—";
+const mapRoom   = raw => ROOM_MAP[raw]   || raw || "";
+
 /* ====== Kurs-Auswahl (uses subject as provided) ====== */
 function buildCourseSelection(allLessons) {
   const cs = document.getElementById("course-selection");
@@ -60,8 +86,9 @@ function buildCourseSelection(allLessons) {
     const label = document.createElement("label");
     label.className = "chk";
     label.innerHTML =
-      `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}>
-       <span>${sub}</span>`;
+    `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}>
+    <span>${mapCourse(sub)}</span>`;
+
     box.appendChild(label);
   });
 
@@ -228,15 +255,22 @@ async function loadTimetable(force=false){
     });
 
     buildGrid(lessons);
-  } catch (e) {
-    console.error("loadTimetable failed:", e);
-    const container = document.getElementById("timetable");
-    if (container) container.innerHTML = "<p class='muted'>Fehler beim Laden.</p>";
-  }
-}
+      const displaySubject = mapCourse(l.subject);
+      const displayRoom    = mapRoom(l.room);
+      card.innerHTML = `
+        <div class="lesson-title">${displaySubject}</div>
+        <div class="lesson-meta">
+          ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
+          ${displayRoom ? `<span>· ${displayRoom}</span>` : ""}
+        </div>
+        ${badge ? `<div class="badge">${badge}</div>` : ""}
+        ${l.note ? `<div class="note">${l.note}</div>` : ""}
+      `;
+
 
 // init
-document.addEventListener("DOMContentLoaded", ()=>{
+document.addEventListener("DOMContentLoaded", async ()=>{
+  await loadMapsOnce();       // <-- ADD
   loadTimetable();
   setInterval(()=>loadTimetable(true), 5*60*1000);
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });

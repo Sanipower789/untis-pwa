@@ -7,6 +7,16 @@ from datetime import datetime, timedelta, date
 
 app = Flask(__name__)
 
+# --- serve lessons_mapped.json from repo root (no caching) ---
+from flask import send_from_directory, make_response
+import os
+
+@app.route("/lessons_mapped.json")
+def lessons_mapped():
+    resp = make_response(send_from_directory(app.root_path, "lessons_mapped.json"))
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    return resp
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -23,7 +33,7 @@ def api_timetable():
     else:  
         today = datetime.now(ZoneInfo("Europe/Berlin")).date()
         ws = today - timedelta(days=today.weekday())  # Monday of THIS week (DE time)
-        
+
     lessons = fetch_week(ws)  
   
     resp = jsonify({  
