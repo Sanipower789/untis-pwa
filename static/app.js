@@ -82,17 +82,11 @@ async function loadMaps() {
 
     if (Array.isArray(j)) {
       // Build from lesson array
-      for (const L of j) {
-        // course
-        if (L.subject && L.subject_original)
-          MAP.course[L.subject] = L.subject_original;
-        // room: try a few likely fields if present
-        if (L.room) {
-          const nice =
-            L.room_nice || L.room_display || L.room_pretty || L.room_original;
-          if (nice) MAP.room[L.room] = nice;
-        }
-      }
+// Build from lesson array — use pretty names exactly as delivered
+for (const L of j) {
+  if (L.subject) MAP.course[L.subject] = L.subject; // ignore subject_original
+  if (L.room)    MAP.room[L.room]       = L.room;    // ignore any *_original
+}
     } else if (j && typeof j === "object") {
       // Object form
       if (j.course && typeof j.course === "object") MAP.course = { ...MAP.course, ...j.course };
