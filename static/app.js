@@ -14,8 +14,10 @@ const isStandalone = () =>
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
       deferred = e;
-      btn.style.display = "inline-block";
-      btn.onclick = async () => { try { await deferred.prompt(); } catch {} };
+      if (btn) {
+        btn.style.display = "inline-block";
+        btn.onclick = async () => { try { await deferred.prompt(); } catch {} };
+      }
     });
     window.addEventListener("visibilitychange", () => {
       if (!document.hidden && isStandalone()) gate.remove();
@@ -26,7 +28,7 @@ const isStandalone = () =>
 })();
 
 /* ====== LocalStorage ====== */
-const LS_COURSES = "myCourses";   // we store/display the pretty subject string itself
+const LS_COURSES = "myCourses";      // store SELECTED COURSE NAMES (pretty)
 const LS_NAME    = "myName";
 const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
 const setCourses = (arr) => localStorage.setItem(LS_COURSES, JSON.stringify(arr || []));
@@ -35,68 +37,50 @@ const setName    = (v) => localStorage.setItem(LS_NAME, v || "");
 
 /* ====== Helpers ====== */
 const WEEKDAYS = ["Mo","Di","Mi","Do","Fr"];
-const parseHM = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
+const parseHM = t => { const [h,m] = String(t).split(":").map(Number); return h*60+m; };
 const fmtHM = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
 const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
 
-// ---- mapping via lessons_mapped.json ----
-let COURSE_MAP = {}; // raw subject -> pretty subject
-let ROOM_MAP   = {}; // raw room    -> pretty room
+/* ---- display helpers (prefer already-pretty fields; ignore *_original unless needed) */
+const subjText = (l) =>
+  l.subject ?? l.subject_display ?? l.subject_pretty ?? l.subject_original ?? "—";
 
-async function loadMapsOnce() {
-  if (Object.keys(COURSE_MAP).length || Object.keys(ROOM_MAP).length) return;
-  try {
-    const j = await fetch("/lessons_mapped.json?v=" + Date.now(), {cache:"no-store"}).then(r=>r.json());
-    if (Array.isArray(j)) {
-      for (const L of j) {
-        if (L.subject && L.subject_original) COURSE_MAP[L.subject] = L.subject_original;
-        if (L.room) {
-          // if your JSON already uses pretty room in L.room, this line will just be ROOM_MAP["A-K21"]="A-K21"
-          // if you also added a prettier field like room_pretty, prefer it:
-          const pretty = L.room_pretty || L.room_display || L.room;
-          ROOM_MAP[L.room] = pretty;
-        }
-      }
-    } else if (j && j.course && j.room) {
-      COURSE_MAP = j.course; ROOM_MAP = j.room;
-    }
-  } catch(e) { console.warn("map load failed", e); }
-}
-const mapCourse = raw => COURSE_MAP[raw] || raw || "—";
-const mapRoom   = raw => ROOM_MAP[raw]   || raw || "";
+const roomText = (l) =>
+  l.room ?? l.room_display ?? l.room_pretty ?? l.room_name ?? l.room_original ?? "";
 
-/* ====== Kurs-Auswahl (uses subject as provided) ====== */
+/* ====== Kurs-Auswahl ====== */
 function buildCourseSelection(allLessons) {
-  const cs = document.getElementById("course-selection");
-  const nameInput = document.getElementById("profile-name");
-  const box = document.getElementById("courses");
-  const editBtn = document.getElementById("edit-courses");
-  const saveBtn = document.getElementById("save-courses");
-  if (!cs || !nameInput || !box) return;
+  const cs       = document.getElementById("course-selection");
+  const nameInput= document.getElementById("profile-name");
+  const box      = document.getElementById("courses");
+  const editBtn  = document.getElementById("edit-courses");
+  const saveBtn  = document.getElementById("save-courses");
+  if (!cs || !nameInput || !box || !saveBtn || !editBtn) return;
 
+  // Name preset
   nameInput.value = getName();
 
-  box.innerHTML = "";
-  const subjects = [...new Set(allLessons.map(l => l.subject).filter(Boolean))]
-    .sort((a,b)=>a.localeCompare(b, "de"));
-  const saved = new Set(getCourses());
+  // Build unique subject list from PRETTY names
+  const subjects = [...new Set(allLessons.map(subjText).filter(Boolean))]
+    .sort((a,b)=>a.localeCompare(b,"de"));
 
+  const saved = new Set(getCourses()); // saved pretty names (new scheme)
+
+  box.innerHTML = "";
   subjects.forEach(sub => {
     const id = "sub_" + sub.replace(/\W+/g,"_");
     const label = document.createElement("label");
     label.className = "chk";
     label.innerHTML =
-    `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}>
-    <span>${mapCourse(sub)}</span>`;
-
+      `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}> <span>${sub}</span>`;
     box.appendChild(label);
   });
 
   saveBtn.onclick = () => {
     const selected = [...box.querySelectorAll("input:checked")]
       .map(i => i.value)
-      .slice(0, 12); // store the pretty subject names
-    setCourses(selected);
+      .slice(0,12); // cap at 12
+    setCourses(selected);                      // store PRETTY names
     setName(nameInput.value.trim());
     cs.style.display = "none";
     editBtn.style.display = "inline-block";
@@ -108,6 +92,7 @@ function buildCourseSelection(allLessons) {
     editBtn.style.display = "none";
   };
 
+  // First run -> show selection if nothing stored
   if (getCourses().length === 0) {
     cs.style.display = "block";
     editBtn.style.display = "none";
@@ -133,19 +118,20 @@ function buildGrid(lessons) {
       tset.add(parseHM(l.end));
     }
   });
+
   const times = [...tset].sort((a,b)=>a-b);
   if (times.length < 2) {
     container.innerHTML = "<p class='muted'>Keine Einträge.</p>";
     return;
   }
 
-  // Shorter rows for short gaps (breaks)
+  // Row heights: short for breaks (<=30 min)
   const ROW_NORMAL = 72;
-  const ROW_BREAK  = 36; // <=30min
+  const ROW_BREAK  = 36;
   const rowHeights = [];
   for (let i = 0; i < times.length - 1; i++) {
-    const dur = times[i+1] - times[i];
-    rowHeights.push(dur <= 30 ? ROW_BREAK : ROW_NORMAL);
+    const duration = times[i+1] - times[i];
+    rowHeights.push(duration <= 30 ? ROW_BREAK : ROW_NORMAL);
   }
 
   const grid = document.createElement("div");
@@ -193,7 +179,7 @@ function buildGrid(lessons) {
     return Math.max(0, idx - 1);
   };
 
-  // Place lessons (use l.subject & l.room directly)
+  // Place lessons
   valid.forEach(l => {
     const day = dayIdxISO(l.date);
     const s = parseHM(l.start), e = parseHM(l.end);
@@ -210,11 +196,11 @@ function buildGrid(lessons) {
       l.status === "vertretung" ? "⚠️ Vertretung" :
       l.status === "aenderung" ? "🟦 Änderung" : "";
 
-    const subj = l.subject || "—";
-    const room = l.room || "";
+    const title = subjText(l);
+    const room  = roomText(l);
 
     card.innerHTML = `
-      <div class="lesson-title">${subj}</div>
+      <div class="lesson-title">${title}</div>
       <div class="lesson-meta">
         ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
         ${room ? `<span>· ${room}</span>` : ""}
@@ -230,48 +216,37 @@ function buildGrid(lessons) {
 
 /* ====== Fetch + Auto-Refresh ====== */
 async function loadTimetable(force=false){
-  try {
-    const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
-    const data = await res.json();
-    let lessons = Array.isArray(data.lessons) ? data.lessons : [];
+  const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
+  const data = await res.json();
+  let lessons = data.lessons || [];
 
-    // initial course selection
-    const cs = document.getElementById("course-selection");
-    if (cs && !cs.dataset.init){
-      buildCourseSelection(lessons);
-      cs.dataset.init = "1";
-    }
+  // init course selection once (using PRETTY names)
+  const cs = document.getElementById("course-selection");
+  if (cs && !cs.dataset.init){
+    buildCourseSelection(lessons);
+    cs.dataset.init = "1";
+  }
 
-    // filter by selected subjects (pretty names)
-    const selected = getCourses();
-    if (selected.length) {
-      lessons = lessons.filter(l => selected.includes(l.subject));
-    }
+  // Filter by selected PRETTY names (backwards-friendly: also accept subject_original)
+  const selected = new Set(getCourses());
+  if (selected.size > 0) {
+    lessons = lessons.filter(l => selected.has(subjText(l)) || selected.has(l.subject_original));
+  }
 
-    lessons.sort((a,b)=>{
-      if (a.date!==b.date) return a.date.localeCompare(b.date);
-      if (a.start!==b.start) return a.start.localeCompare(b.start);
-      return (a.subject||"").localeCompare(b.subject||"");
-    });
+  lessons.sort((a,b)=>{
+    if (a.date!==b.date)  return a.date.localeCompare(b.date);
+    if (a.start!==b.start) return a.start.localeCompare(b.start);
+    return subjText(a).localeCompare(subjText(b), "de");
+  });
 
-    buildGrid(lessons);
-      const displaySubject = mapCourse(l.subject);
-      const displayRoom    = mapRoom(l.room);
-      card.innerHTML = `
-        <div class="lesson-title">${displaySubject}</div>
-        <div class="lesson-meta">
-          ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
-          ${displayRoom ? `<span>· ${displayRoom}</span>` : ""}
-        </div>
-        ${badge ? `<div class="badge">${badge}</div>` : ""}
-        ${l.note ? `<div class="note">${l.note}</div>` : ""}
-      `;
-
+  buildGrid(lessons);
+}
 
 // init
-document.addEventListener("DOMContentLoaded", async ()=>{
-  await loadMapsOnce();       // <-- ADD
+document.addEventListener("DOMContentLoaded", ()=>{
   loadTimetable();
+  // alle 5 Minuten refresh
   setInterval(()=>loadTimetable(true), 5*60*1000);
+  // bei Rückkehr in den Tab sofort aktualisieren
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });
