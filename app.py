@@ -23,7 +23,7 @@ def api_timetable():
     else:  
         today = datetime.now(ZoneInfo("Europe/Berlin")).date()
         ws = today - timedelta(days=today.weekday())  # Monday of THIS week (DE time)
-  
+        
     lessons = fetch_week(ws)  
   
     resp = jsonify({  
