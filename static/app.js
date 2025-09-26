@@ -369,4 +369,4 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   // alle 5 Minuten refresh
   setInterval(()=>loadTimetable(true), 5*60*1000);
   // bei Rückkehr in den Tab sofort aktualisieren
-  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); })});
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
