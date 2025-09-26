@@ -26,8 +26,8 @@ const isStandalone = () =>
 })();
 
 /* ====== LocalStorage ====== */
-const LS_COURSES = "myCourses";      // Array<String> RAW subject codes (e.g. "DG1")
-const LS_NAME    = "myName";         // String
+const LS_COURSES = "myCourses";   // we store/display the pretty subject string itself
+const LS_NAME    = "myName";
 const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
 const setCourses = (arr) => localStorage.setItem(LS_COURSES, JSON.stringify(arr || []));
 const getName    = () => localStorage.getItem(LS_NAME) || "";
@@ -39,87 +39,8 @@ const parseHM = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
 const fmtHM = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
 const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
 
-/* ====== Mapping (single source of truth: lessons_mapped.json) ====== */
-/* We’ll try to read:
-   - Object form:
-       {
-         "course": { "DG1": "Deutsch 1", ... },
-         "room":   { "A-K15": "A-K15 (Keller 1)", ... }
-       }
-     or a flat object { "DG1": "Deutsch 1", "A-K15": "A-K15 ..." }
-
-   - Array form (lessons list):
-       [{ subject:"DG1", subject_original:"GK DEUTSCH 1", room:"A-K15", ...}, ...]
-     -> we build maps from subject_original / room_* if present.
-*/
-
-let MAP = { course: {}, room: {} };
-
-async function fetchJSON(url){
-  const r = await fetch(url + "?v=" + Date.now(), { cache: "no-store" });
-  if (!r.ok) throw new Error(url + " not ok");
-  return r.json();
-}
-async function fetchText(url){
-  const r = await fetch(url + "?v=" + Date.now(), { cache: "no-store" });
-  if (!r.ok) throw new Error(url + " not ok");
-  return r.text();
-}
-function parseTxtMap(txt){
-  const m = {};
-  txt.split(/\r?\n/).forEach(line=>{
-    const k = line.match(/^\s*(.*?)\s*=\s*(.*?)\s*$/);
-    if (k && k[1]) m[k[1]] = k[2] ?? "";
-  });
-  return m;
-}
-
-async function loadMaps() {
-  MAP = { course: {}, room: {} };
-
-  try {
-    const j = await fetchJSON("/lessons_mapped.json");
-
-    if (Array.isArray(j)) {
-      // Build from lesson array
-// Build from lesson array — use pretty names exactly as delivered
-for (const L of j) {
-  if (L.subject) MAP.course[L.subject] = L.subject; // ignore subject_original
-  if (L.room)    MAP.room[L.room]       = L.room;    // ignore any *_original
-}
-    } else if (j && typeof j === "object") {
-      // Object form
-      if (j.course && typeof j.course === "object") MAP.course = { ...MAP.course, ...j.course };
-      if (j.room   && typeof j.room   === "object") MAP.room   = { ...MAP.room,   ...j.room   };
-
-      // flat fallback (keys mixed): treat strings with letters+digits as course-ish and A-*/B-* as rooms — best effort
-      if (!j.course && !j.room) {
-        for (const [k,v] of Object.entries(j)) {
-          if (typeof v === "string") {
-            if (/^[A-Z]+[0-9]/.test(k)) MAP.course[k] = v;
-            else if (/^[A-Z]-/.test(k)) MAP.room[k] = v;
-          }
-        }
-      }
-    }
-  } catch (_) {
-    // ignore; we’ll try room fallbacks below
-  }
-
-  // Optional: room fallback files if lessons_mapped.json had no room map
-  if (Object.keys(MAP.room).length === 0) {
-    try { Object.assign(MAP.room, await fetchJSON("/rooms_mapped.json")); } catch {}
-    if (Object.keys(MAP.room).length === 0) {
-      try { Object.assign(MAP.room, parseTxtMap(await fetchText("/room_mapping.txt"))); } catch {}
-    }
-  }
-}
-
-const mapCourse = raw => (raw && MAP.course[raw]) || raw || "—";
-const mapRoom   = raw => (raw && MAP.room[raw])   || raw || "";
-
-/* ====== Kurs-Auswahl ====== */
-function buildCourseSelection(allLessonsRAW) {
+/* ====== Kurs-Auswahl (uses subject as provided) ====== */
+function buildCourseSelection(allLessons) {
   const cs = document.getElementById("course-selection");
   const nameInput = document.getElementById("profile-name");
   const box = document.getElementById("courses");
@@ -127,25 +48,27 @@ function buildCourseSelection(allLessonsRAW) {
   const saveBtn = document.getElementById("save-courses");
   if (!cs || !nameInput || !box) return;
 
-  // name preset
   nameInput.value = getName();
 
-  // Liste einmal aufbauen (use RAW values, display mapped)
   box.innerHTML = "";
-  const subjects = [...new Set(allLessonsRAW.map(l => l.subject).filter(Boolean))]
-    .sort((a,b)=>(a||"").localeCompare(b||"", "de"));
-  label.innerHTML = `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}> <span>${sub}</span>`;
+  const subjects = [...new Set(allLessons.map(l => l.subject).filter(Boolean))]
+    .sort((a,b)=>a.localeCompare(b, "de"));
+  const saved = new Set(getCourses());
 
   subjects.forEach(sub => {
     const id = "sub_" + sub.replace(/\W+/g,"_");
     const label = document.createElement("label");
     label.className = "chk";
-    label.innerHTML = `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}> <span>${mapCourse(sub)}</span>`;
+    label.innerHTML =
+      `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}>
+       <span>${sub}</span>`;
     box.appendChild(label);
   });
 
   saveBtn.onclick = () => {
-    const selected = [...box.querySelectorAll("input:checked")].map(i => i.value).slice(0,12); // store RAW
+    const selected = [...box.querySelectorAll("input:checked")]
+      .map(i => i.value)
+      .slice(0, 12); // store the pretty subject names
     setCourses(selected);
     setName(nameInput.value.trim());
     cs.style.display = "none";
@@ -158,19 +81,24 @@ function buildCourseSelection(allLessonsRAW) {
     editBtn.style.display = "none";
   };
 
-  if (getCourses().length === 0) { cs.style.display = "block"; editBtn.style.display = "none"; }
-  else                           { cs.style.display = "none";  editBtn.style.display = "inline-block"; }
+  if (getCourses().length === 0) {
+    cs.style.display = "block";
+    editBtn.style.display = "none";
+  } else {
+    cs.style.display = "none";
+    editBtn.style.display = "inline-block";
+  }
 }
 
 /* ====== Grid render (Untis-style) ====== */
-function buildGrid(lessonsRAW) {
+function buildGrid(lessons) {
   const container = document.getElementById("timetable");
   container.innerHTML = "";
 
   // Collect times & keep only Mon–Fri
   const tset = new Set();
   const valid = [];
-  lessonsRAW.forEach(l => {
+  lessons.forEach(l => {
     const d = dayIdxISO(l.date);
     if (d >= 1 && d <= 5) {
       valid.push(l);
@@ -184,13 +112,13 @@ function buildGrid(lessonsRAW) {
     return;
   }
 
-  // Row heights: short for breaks (<=30 min)
+  // Shorter rows for short gaps (breaks)
   const ROW_NORMAL = 72;
-  const ROW_BREAK  = 36;
+  const ROW_BREAK  = 36; // <=30min
   const rowHeights = [];
   for (let i = 0; i < times.length - 1; i++) {
-    const duration = times[i+1] - times[i];
-    rowHeights.push(duration <= 30 ? ROW_BREAK : ROW_NORMAL);
+    const dur = times[i+1] - times[i];
+    rowHeights.push(dur <= 30 ? ROW_BREAK : ROW_NORMAL);
   }
 
   const grid = document.createElement("div");
@@ -238,7 +166,7 @@ function buildGrid(lessonsRAW) {
     return Math.max(0, idx - 1);
   };
 
-  // Place lessons (display mapped names)
+  // Place lessons (use l.subject & l.room directly)
   valid.forEach(l => {
     const day = dayIdxISO(l.date);
     const s = parseHM(l.start), e = parseHM(l.end);
@@ -255,14 +183,14 @@ function buildGrid(lessonsRAW) {
       l.status === "vertretung" ? "⚠️ Vertretung" :
       l.status === "aenderung" ? "🟦 Änderung" : "";
 
-    const displaySubject = l.subject || "—";
-    const displayRoom    = l.room || "";
-    
+    const subj = l.subject || "—";
+    const room = l.room || "";
+
     card.innerHTML = `
-      <div class="lesson-title">${displaySubject}</div>
+      <div class="lesson-title">${subj}</div>
       <div class="lesson-meta">
         ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
-        ${displayRoom ? `<span>· ${displayRoom}</span>` : ""}
+        ${room ? `<span>· ${room}</span>` : ""}
       </div>
       ${badge ? `<div class="badge">${badge}</div>` : ""}
       ${l.note ? `<div class="note">${l.note}</div>` : ""}
@@ -275,40 +203,40 @@ function buildGrid(lessonsRAW) {
 
 /* ====== Fetch + Auto-Refresh ====== */
 async function loadTimetable(force=false){
-  // make sure maps are available before building list/grid
-  if (!force && Object.keys(MAP.course).length === 0 && Object.keys(MAP.room).length === 0) {
-    try { await loadMaps(); } catch {}
+  try {
+    const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
+    const data = await res.json();
+    let lessons = Array.isArray(data.lessons) ? data.lessons : [];
+
+    // initial course selection
+    const cs = document.getElementById("course-selection");
+    if (cs && !cs.dataset.init){
+      buildCourseSelection(lessons);
+      cs.dataset.init = "1";
+    }
+
+    // filter by selected subjects (pretty names)
+    const selected = getCourses();
+    if (selected.length) {
+      lessons = lessons.filter(l => selected.includes(l.subject));
+    }
+
+    lessons.sort((a,b)=>{
+      if (a.date!==b.date) return a.date.localeCompare(b.date);
+      if (a.start!==b.start) return a.start.localeCompare(b.start);
+      return (a.subject||"").localeCompare(b.subject||"");
+    });
+
+    buildGrid(lessons);
+  } catch (e) {
+    console.error("loadTimetable failed:", e);
+    const container = document.getElementById("timetable");
+    if (container) container.innerHTML = "<p class='muted'>Fehler beim Laden.</p>";
   }
-
-  const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
-  const data = await res.json();
-  let lessonsRAW = data.lessons || [];
-
-  // initialize course selection (built from RAW, displayed with mapping)
-  const cs = document.getElementById("course-selection");
-  if (cs && !cs.dataset.init){
-    buildCourseSelection(lessonsRAW);
-    cs.dataset.init = "1";
-  }
-
-  // filter by RAW selections
-  const selected = getCourses();
-  if (selected.length) {
-    lessonsRAW = lessonsRAW.filter(l => selected.includes(l.subject));
-  }
-
-  lessonsRAW.sort((a,b)=>{
-    if (a.date!==b.date) return a.date.localeCompare(b.date);
-    if (a.start!==b.start) return a.start.localeCompare(b.start);
-    return (mapCourse(a.subject)||"").localeCompare(mapCourse(b.subject)||"");
-  });
-
-  buildGrid(lessonsRAW);
 }
 
 // init
-document.addEventListener("DOMContentLoaded", async ()=>{
-  try { await loadMaps(); } catch {}
+document.addEventListener("DOMContentLoaded", ()=>{
   loadTimetable();
   setInterval(()=>loadTimetable(true), 5*60*1000);
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
