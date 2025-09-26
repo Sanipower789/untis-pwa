@@ -133,8 +133,8 @@ function buildCourseSelection(allLessonsRAW) {
   // Liste einmal aufbauen (use RAW values, display mapped)
   box.innerHTML = "";
   const subjects = [...new Set(allLessonsRAW.map(l => l.subject).filter(Boolean))]
-    .sort((a,b)=>mapCourse(a).localeCompare(mapCourse(b), "de"));
-  const saved = new Set(getCourses());
+    .sort((a,b)=>(a||"").localeCompare(b||"", "de"));
+  label.innerHTML = `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}> <span>${sub}</span>`;
 
   subjects.forEach(sub => {
     const id = "sub_" + sub.replace(/\W+/g,"_");
@@ -255,9 +255,9 @@ function buildGrid(lessonsRAW) {
       l.status === "vertretung" ? "⚠️ Vertretung" :
       l.status === "aenderung" ? "🟦 Änderung" : "";
 
-    const displaySubject = mapCourse(l.subject);
-    const displayRoom    = mapRoom(l.room);
-
+    const displaySubject = l.subject || "—";
+    const displayRoom    = l.room || "";
+    
     card.innerHTML = `
       <div class="lesson-title">${displaySubject}</div>
       <div class="lesson-meta">
