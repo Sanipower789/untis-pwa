@@ -195,7 +195,6 @@ function buildGrid(lessons) {
   grid.className = "grid";
   const headerH = 44;
   grid.style.gridTemplateRows = [headerH + "px", ...rowHeights.map(h => h + "px")].join(" ");
-  grid.style.gridTemplateColumns = "72px repeat(5, 1fr)";
 
   // Header row
   const corner = document.createElement("div");
@@ -272,18 +271,18 @@ function buildGrid(lessons) {
 
   // Clean placeholder for empty weekdays (no grid underneath)
   for (let d = 1; d <= 5; d++) {
-    if (daysWithLessons.has(d)) continue;
-    const placeholder = document.createElement("div");
-    placeholder.className = "placeholder-day";
-    placeholder.style.gridColumn = String(d + 1);
-    placeholder.style.gridRow = `2 / -1`; // full column (below header)
-    placeholder.innerHTML = `
-      <div class="ph-card" role="status" aria-label="Daten folgen">
-        <div class="ph-ico" aria-hidden="true">⏳</div>
-        <div class="ph-txt">Bald verfügbar</div>
-      </div>`;
+  if (daysWithLessons.has(d)) continue;
+  const placeholder = document.createElement("div");
+  placeholder.className = "placeholder-day";
+  placeholder.style.gridColumn = String(d + 1);
+  placeholder.style.gridRow = `2 / -1`;
+  placeholder.innerHTML = `
+    <div class="ph-card" role="status" aria-label="Daten folgen">
+      <div class="ph-ico" aria-hidden="true">⏳</div>
+      <div class="ph-txt">Bald verfügbar</div>
+    </div>`;
+  grid.appendChild(placeholder); // ✅ add it to the grid
   }
-
   container.appendChild(grid);
 }
 
