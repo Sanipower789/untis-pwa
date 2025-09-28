@@ -70,12 +70,21 @@ async function loadMappings() {
 function mapSubject(lesson) {
   const orig = lesson.subject_original ?? lesson.subject ?? "";
   const key  = _norm(orig);
-  return COURSE_MAP[key] || (lesson.subject ?? "—");
+  // important: allow empty string mappings if you ever add them
+  if (Object.prototype.hasOwnProperty.call(COURSE_MAP, key)) {
+    return COURSE_MAP[key];
+  }
+  return lesson.subject ?? "—";
 }
+
 function mapRoom(lesson) {
   const live = lesson.room ?? "";
   const key  = _norm(live);
-  return ROOM_MAP[key] || live;
+  // important: allow "" to pass through (don’t fallback to live)
+  if (Object.prototype.hasOwnProperty.call(ROOM_MAP, key)) {
+    return ROOM_MAP[key];
+  }
+  return live;
 }
 
 /* --- Course selection UI --- */
@@ -146,17 +155,20 @@ function buildGrid(lessons) {
     }
   }
 
-  const times = [...tset].sort((a,b)=>a-b);
+  const times = [...tset].sort((a, b) => a - b);
   if (times.length < 2) {
-    container.innerHTML = "<p class='muted'>Keine Einträge.</p>";
+    container.innerHTML = `
+      <div class="empty-week">
+        ⏳ Die Daten für diese Woche kommen bald.
+      </div>`;
     return;
   }
 
   const ROW_NORMAL = 72;
-  const ROW_BREAK  = 36;
+  const ROW_BREAK = 36;
   const rowHeights = [];
   for (let i = 0; i < times.length - 1; i++) {
-    const duration = times[i+1] - times[i];
+    const duration = times[i + 1] - times[i];
     rowHeights.push(duration <= 30 ? ROW_BREAK : ROW_NORMAL);
   }
 
@@ -166,7 +178,7 @@ function buildGrid(lessons) {
   grid.style.gridTemplateRows = [headerH + "px", ...rowHeights.map(h => h + "px")].join(" ");
   grid.style.gridTemplateColumns = "72px repeat(5, 1fr)";
 
-  // header
+  // Header row
   const corner = document.createElement("div");
   corner.className = "hdr corner";
   corner.textContent = "Zeit";
@@ -174,14 +186,14 @@ function buildGrid(lessons) {
   for (let d = 1; d <= 5; d++) {
     const h = document.createElement("div");
     h.className = "hdr day";
-    h.textContent = WEEKDAYS[d-1];
+    h.textContent = WEEKDAYS[d - 1];
     grid.appendChild(h);
   }
 
-  // rows + empty slots
+  // Time rows + empty slots
   for (let i = 0; i < times.length - 1; i++) {
     const startM = times[i];
-    const endM   = times[i+1];
+    const endM = times[i + 1];
 
     const timeCell = document.createElement("div");
     timeCell.className = "timecell";
@@ -205,8 +217,8 @@ function buildGrid(lessons) {
     return Math.max(0, idx - 1);
   };
 
-  // place lessons
-  for (const l of valid) {
+  // Place lessons
+  valid.forEach(l => {
     const day = dayIdxISO(l.date);
     const s = parseHM(l.start), e = parseHM(l.end);
     const r0 = rowIndexFor(s), r1 = rowIndexFor(e);
@@ -235,6 +247,19 @@ function buildGrid(lessons) {
       ${l.note ? `<div class="note">${l.note}</div>` : ""}
     `;
     grid.appendChild(card);
+  });
+
+  // Placeholder for empty weekdays
+  for (let d = 1; d <= 5; d++) {
+    const hasDay = valid.some(l => dayIdxISO(l.date) === d);
+    if (!hasDay) {
+      const placeholder = document.createElement("div");
+      placeholder.className = "placeholder-day";
+      placeholder.style.gridColumn = String(d + 1);
+      placeholder.style.gridRow = `2 / ${rowHeights.length + 2}`;
+      placeholder.innerHTML = `⏳ <span>Die Daten für diesen Tag kommen bald.</span>`;
+      grid.appendChild(placeholder);
+    }
   }
 
   container.appendChild(grid);
