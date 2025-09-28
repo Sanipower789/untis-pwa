@@ -158,7 +158,7 @@ function buildGrid(lessons) {
   const times = [...tset].sort((a, b) => a - b);
   if (times.length < 2) {
     container.innerHTML = `
-      <div class="empty-week">⏳ Die Daten für diese Woche kommen bald.</div>`;
+      <div class="empty-week">⏳ Bald verfügbar</div>`;
     return;
   }
 
@@ -259,7 +259,7 @@ function buildGrid(lessons) {
     placeholder.className = "placeholder-day";
     placeholder.style.gridColumn = String(d + 1);
     placeholder.style.gridRow = `2 / -1`; // full column (below header)
-    placeholder.innerHTML = `⏳ <span>Die Daten für diesen Tag kommen bald.</span>`;
+    placeholder.innerHTML = `⏳ <span>Bald verfügbar</span>`;
     grid.appendChild(placeholder);
   }
 

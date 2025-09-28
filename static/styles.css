@@ -51,8 +51,8 @@ button{
 
 /* grid: time col + 5 equal day cols */
 .grid{
-  display:grid;
-  grid-template-columns: 70px repeat(5, 1fr); /* all 5 days equal share */
+  display: grid;
+  grid-template-columns: 70px repeat(5, minmax(0, 1fr));
   border:1px solid var(--grid);
   border-radius:12px;
   overflow:hidden;
@@ -122,10 +122,13 @@ button{
 
 /* ===== Placeholders ===== */
 .placeholder-day {
+  white-space: nowrap;      /* keep text on one line */
+  text-overflow: ellipsis;  /* truncate if too long */
+  overflow: hidden;
+  font-size: 0.8rem;
   display:flex;
   align-items:center;
   justify-content:center;
-  font-size: 0.9rem;
   color:#9aa0a6;
   background:#15161a;
   border-radius:8px;
@@ -155,4 +158,10 @@ button{
   .lesson{font-size:11px;padding:6px}
   .lesson-title{font-size:11.5px}
   .lesson-meta{font-size:10.5px}
+  .placeholder-day span {
+    display: none;
+  }
+  .placeholder-day::after {
+    content: "⏳ Bald verfügbar";
+  }
 }
