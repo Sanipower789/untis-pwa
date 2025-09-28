@@ -131,7 +131,6 @@ button{
   pointer-events:none;
 }
 
-/* the little card inside the column */
 .ph-card{
   display:flex;
   flex-direction:column;
@@ -146,8 +145,9 @@ button{
   margin:6px auto;
 
   box-shadow:0 0 0 1px rgba(255,255,255,0.03) inset;
-  max-width:160px;
   width:88%;
+  max-width:160px;
+  min-width:0;            /* allow text to shrink inside flex */
 }
 
 .ph-ico{
@@ -156,10 +156,14 @@ button{
   opacity:.9;
 }
 
-.ph-line {
-  font-size: .9rem;
-  color: #a7aab1;
-  line-height: 1.2;
+.ph-txt{
+  font-size:.88rem;
+  color:#a7aab1;
+  white-space:nowrap;     /* single line */
+  overflow:hidden;
+  text-overflow:ellipsis; /* … if tight */
+  letter-spacing:.1px;
+  min-width:0;
 }
 
 /* whole-week empty message */
@@ -174,7 +178,7 @@ button{
 /* ===== Mobile tweaks ===== */
 @media (max-width: 425px){
   .grid{
-    grid-template-columns: 60px repeat(5, 1fr);
+    grid-template-columns: 60px repeat(5, minmax(0, 1fr));
   }
   .timecell{font-size:11px}
   .lesson{font-size:11px;padding:6px}
