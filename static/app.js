@@ -28,7 +28,7 @@ const isStandalone = () =>
 })();
 
 /* ====== LocalStorage ====== */
-const LS_COURSES = "myCourses";      // store SELECTED COURSE NAMES (pretty)
+const LS_COURSES = "myCourses";      // store SELECTED PRETTY SUBJECT NAMES
 const LS_NAME    = "myName";
 const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
 const setCourses = (arr) => localStorage.setItem(LS_COURSES, JSON.stringify(arr || []));
@@ -41,14 +41,51 @@ const parseHM = t => { const [h,m] = String(t).split(":").map(Number); return h*
 const fmtHM = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
 const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
 
-/* ---- display helpers (prefer already-pretty fields; ignore *_original unless needed) */
-const subjText = (l) =>
-  l.subject ?? l.subject_display ?? l.subject_pretty ?? l.subject_original ?? "—";
+// --- Mapping from lessons_mapped.json ---
+const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g," ").toLowerCase();
 
-const roomText = (l) =>
-  l.room ?? l.room_display ?? l.room_pretty ?? l.room_name ?? l.room_original ?? "";
+const CourseMap = new Map();   // key: original subject -> pretty subject
+const RoomMap   = new Map();   // key: original room    -> pretty room
+let mapsReady = false;
 
-/* ====== Kurs-Auswahl ====== */
+async function loadMaps() {
+  if (mapsReady) return;
+  try {
+    const res = await fetch(`/lessons_mapped.json?v=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) throw new Error("failed to load lessons_mapped.json");
+    const arr = await res.json();
+
+    for (const L of arr) {
+      const subjOrig = _norm(L.subject_original ?? "");
+      const subjPretty = (L.subject ?? "").toString().trim();
+      if (subjOrig && subjPretty && !CourseMap.has(subjOrig)) CourseMap.set(subjOrig, subjPretty);
+
+      const roomOrig = _norm(L.room ?? "");   // mapped file stores final room in 'room'; some entries may have empty room
+      const roomPretty = (L.room ?? "").toString().trim();
+      // If the mapped file contained an original room (older versions),
+      // you could also support L.room_original here:
+      const roomOrigField = _norm(L.room_original ?? L.room ?? "");
+      if (roomOrigField && roomPretty && !RoomMap.has(roomOrigField)) RoomMap.set(roomOrigField, roomPretty);
+    }
+  } catch (e) {
+    console.warn("Mapping maps not loaded; proceeding with live labels only.", e);
+  } finally {
+    mapsReady = true;
+  }
+}
+
+const mapSubject = (l) => {
+  // Prefer explicit mapping based on original
+  const key = _norm(l.subject_original ?? "");
+  return CourseMap.get(key) || (l.subject ?? "—");
+};
+
+const mapRoom = (l) => {
+  const key = _norm(l.room ?? "");
+  return RoomMap.get(key) || (l.room ?? "");
+};
+
+/* ====== Course selection ====== */
 function buildCourseSelection(allLessons) {
   const cs       = document.getElementById("course-selection");
   const nameInput= document.getElementById("profile-name");
@@ -57,14 +94,13 @@ function buildCourseSelection(allLessons) {
   const saveBtn  = document.getElementById("save-courses");
   if (!cs || !nameInput || !box || !saveBtn || !editBtn) return;
 
-  // Name preset
   nameInput.value = getName();
 
-  // Build unique subject list from PRETTY names
-  const subjects = [...new Set(allLessons.map(subjText).filter(Boolean))]
+  // Build unique list from PRETTY mapped subjects
+  const subjects = [...new Set(allLessons.map(mapSubject).filter(Boolean))]
     .sort((a,b)=>a.localeCompare(b,"de"));
 
-  const saved = new Set(getCourses()); // saved pretty names (new scheme)
+  const saved = new Set(getCourses());
 
   box.innerHTML = "";
   subjects.forEach(sub => {
@@ -79,8 +115,8 @@ function buildCourseSelection(allLessons) {
   saveBtn.onclick = () => {
     const selected = [...box.querySelectorAll("input:checked")]
       .map(i => i.value)
-      .slice(0,12); // cap at 12
-    setCourses(selected);                      // store PRETTY names
+      .slice(0,12);
+    setCourses(selected);
     setName(nameInput.value.trim());
     cs.style.display = "none";
     editBtn.style.display = "inline-block";
@@ -92,7 +128,6 @@ function buildCourseSelection(allLessons) {
     editBtn.style.display = "none";
   };
 
-  // First run -> show selection if nothing stored
   if (getCourses().length === 0) {
     cs.style.display = "block";
     editBtn.style.display = "none";
@@ -102,12 +137,12 @@ function buildCourseSelection(allLessons) {
   }
 }
 
-/* ====== Grid render (Untis-style) ====== */
+/* ====== Grid render ====== */
 function buildGrid(lessons) {
   const container = document.getElementById("timetable");
   container.innerHTML = "";
 
-  // Collect times & keep only Mon–Fri
+  // Mon–Fri only
   const tset = new Set();
   const valid = [];
   lessons.forEach(l => {
@@ -125,7 +160,6 @@ function buildGrid(lessons) {
     return;
   }
 
-  // Row heights: short for breaks (<=30 min)
   const ROW_NORMAL = 72;
   const ROW_BREAK  = 36;
   const rowHeights = [];
@@ -196,8 +230,8 @@ function buildGrid(lessons) {
       l.status === "vertretung" ? "⚠️ Vertretung" :
       l.status === "aenderung" ? "🟦 Änderung" : "";
 
-    const title = subjText(l);
-    const room  = roomText(l);
+    const title = mapSubject(l);
+    const room  = mapRoom(l);
 
     card.innerHTML = `
       <div class="lesson-title">${title}</div>
@@ -216,27 +250,29 @@ function buildGrid(lessons) {
 
 /* ====== Fetch + Auto-Refresh ====== */
 async function loadTimetable(force=false){
+  await loadMaps(); // ensure mapping tables are ready
+
   const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
   const data = await res.json();
   let lessons = data.lessons || [];
 
-  // init course selection once (using PRETTY names)
+  // Build the selection UI once using mapped PRETTY subjects
   const cs = document.getElementById("course-selection");
   if (cs && !cs.dataset.init){
     buildCourseSelection(lessons);
     cs.dataset.init = "1";
   }
 
-  // Filter by selected PRETTY names (backwards-friendly: also accept subject_original)
+  // Filter by selected PRETTY names only
   const selected = new Set(getCourses());
   if (selected.size > 0) {
-    lessons = lessons.filter(l => selected.has(subjText(l)) || selected.has(l.subject_original));
+    lessons = lessons.filter(l => selected.has(mapSubject(l)));
   }
 
   lessons.sort((a,b)=>{
-    if (a.date!==b.date)  return a.date.localeCompare(b.date);
+    if (a.date!==b.date)   return a.date.localeCompare(b.date);
     if (a.start!==b.start) return a.start.localeCompare(b.start);
-    return subjText(a).localeCompare(subjText(b), "de");
+    return mapSubject(a).localeCompare(mapSubject(b), "de");
   });
 
   buildGrid(lessons);
@@ -245,8 +281,8 @@ async function loadTimetable(force=false){
 // init
 document.addEventListener("DOMContentLoaded", ()=>{
   loadTimetable();
-  // alle 5 Minuten refresh
+  // refresh every 5 minutes
   setInterval(()=>loadTimetable(true), 5*60*1000);
-  // bei Rückkehr in den Tab sofort aktualisieren
+  // refresh on tab focus
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });

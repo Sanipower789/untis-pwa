@@ -2,15 +2,15 @@ import os, time, requests
 from datetime import date, timedelta
 
 # --- ENV / Secrets ---
-BASE   = os.getenv("UNTIS_BASE")       # z.B. https://herakles.webuntis.com/WebUntis/jsonrpc.do
-SCHOOL = os.getenv("UNTIS_SCHOOL")     # cjd-königswinter
-USER   = os.getenv("UNTIS_USER")       # EF
-PASS   = os.getenv("UNTIS_PASS")       # !CjdE1**
-EID    = int(os.getenv("UNTIS_ELEMENT_ID", "0"))   # 1634
-ETYPE  = int(os.getenv("UNTIS_ELEMENT_TYPE", "5")) # 5=Schüler, 1=Klasse … je nach Setup
+BASE   = os.getenv("UNTIS_BASE")       # e.g. https://.../WebUntis/jsonrpc.do
+SCHOOL = os.getenv("UNTIS_SCHOOL")
+USER   = os.getenv("UNTIS_USER")
+PASS   = os.getenv("UNTIS_PASS")
+EID    = int(os.getenv("UNTIS_ELEMENT_ID", "0"))
+ETYPE  = int(os.getenv("UNTIS_ELEMENT_TYPE", "5"))  # 5=student, 1=class, ...
 
 if not all([BASE, SCHOOL, USER, PASS]):
-    raise RuntimeError("UNTIS_* Umgebungsvariablen fehlen.")
+    raise RuntimeError("UNTIS_* environment variables missing.")
 
 session = requests.Session()
 _SESS_ID = None
@@ -37,14 +37,17 @@ def _login():
         return {"JSESSIONID": _SESS_ID}
     res = _rpc("authenticate", {"user": USER, "password": PASS, "client": "untis-pwa"})
     _SESS_ID = res["sessionId"]
-    _SESS_EXP = now + 12*60   # ~12 Minuten
+    _SESS_EXP = now + 12 * 60  # ~12 min
     return {"JSESSIONID": _SESS_ID}
 
-def _yyyymmdd(d: date) -> int: return d.year*10000 + d.month*100 + d.day
-def _hm(n:int) -> str: return f"{n//100:02d}:{n%100:02d}"
+def _yyyymmdd(d: date) -> int:
+    return d.year*10000 + d.month*100 + d.day
+
+def _hm(n: int) -> str:
+    return f"{n//100:02d}:{n%100:02d}"
 
 def _status_from_item(x, note: str) -> str:
-    """entfaellt / vertretung / aenderung / normal aus diversen Feldern ableiten."""
+    """entfaellt / vertretung / aenderung / normal."""
     txt = (note or "").lower()
     code = str(x.get("code","")).lower()
     cell = str(x.get("cellState","")).lower()
@@ -55,16 +58,16 @@ def _status_from_item(x, note: str) -> str:
     if x.get("cancelled", False) is True: return "entfaellt"
     if "entf" in subst or "cancel" in subst: return "entfaellt"
     if "vert" in subst or "vertret" in txt: return "vertretung"
-    if "änder" in subst or "aender" in subst or "änder" in txt or "aender" in txt: return "aenderung"
+    if any(k in subst or k in txt for k in ("änder", "aender")): return "aenderung"
     if "entfall" in txt or "cancel" in txt: return "entfaellt"
     return "normal"
 
 def fetch_week(week_start: date):
-    """Holt Stundenplan Mo–So ab week_start (Montag empfohlen)."""
+    """Fetch timetable Mon–Sun starting at week_start (Monday recommended)."""
     cookies = _login()
     s, e = week_start, week_start + timedelta(days=7)
 
-    # roher Plan
+    # raw timetable
     tt = _rpc("getTimetable", {
         "options": {
             "element": {"id": EID, "type": ETYPE},
@@ -73,7 +76,7 @@ def fetch_week(week_start: date):
         }
     }, cookies)
 
-    # Namens-Lookups
+    # Lookups
     try: teachers = {t["id"]: (t.get("longName") or t.get("name") or "") for t in _rpc("getTeachers", {}, cookies)}
     except: teachers = {}
     try: subjects = {s["id"]: (s.get("longName") or s.get("name") or "") for s in _rpc("getSubjects", {}, cookies)}
@@ -83,43 +86,44 @@ def fetch_week(week_start: date):
 
     lessons = []
     for x in tt:
-        d = str(x.get("date",""))
-        date_iso = f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d)==8 else d
+      d = str(x.get("date",""))
+      date_iso = f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d)==8 else d
 
-        subj_id = (x.get("su") or [{}])[0].get("id")
-        teach_id = (x.get("te") or [{}])[0].get("id")
-        room_id  = (x.get("ro") or [{}])[0].get("id")
+      subj_id = (x.get("su") or [{}])[0].get("id")
+      teach_id = (x.get("te") or [{}])[0].get("id")
+      room_id  = (x.get("ro") or [{}])[0].get("id")
 
-        subj = subjects.get(subj_id, "")
-        teach = teachers.get(teach_id, "")
-        room  = rooms.get(room_id, "")
+      subj = subjects.get(subj_id, "")
+      teach = teachers.get(teach_id, "")
+      room  = rooms.get(room_id, "")
 
-        note = (x.get("lstext") or x.get("substitutionText") or x.get("periodText") or "").strip()
-        status = _status_from_item(x, note)
+      note = (x.get("lstext") or x.get("substitutionText") or x.get("periodText") or "").strip()
+      status = _status_from_item(x, note)
 
-        # Specials (Methodentag/Prüfung etc.) hervorheben
-        lesson_code   = str(x.get("lessonCode") or "")
-        activity_type = str(x.get("activityType") or "")
-        lesson_text   = str(x.get("lessonText") or "")
-        is_special = (
-            lesson_code.upper() == "UNTIS_ADDITIONAL"
-            or (activity_type and activity_type.lower() != "unterricht")
-            or (not subj and (note or lesson_text))
-        )
-        display_subject = (note or lesson_text or subj or "Sondertermin") if is_special else (subj or "")
+      # Choose a display subject for specials (like projects/exams) else normal subject
+      lesson_code   = str(x.get("lessonCode") or "")
+      activity_type = str(x.get("activityType") or "")
+      lesson_text   = str(x.get("lessonText") or "")
+      is_special = (
+          lesson_code.upper() == "UNTIS_ADDITIONAL"
+          or (activity_type and activity_type.lower() != "unterricht")
+          or (not subj and (note or lesson_text))
+      )
+      display_subject = (note or lesson_text or subj or "Sondertermin") if is_special else (subj or "")
 
-        lessons.append({
-            "id": f"{x.get('id')}-{x.get('date')}-{x.get('startTime')}",
-            "date": date_iso,
-            "start": _hm(x.get("startTime", 0)),
-            "end": _hm(x.get("endTime", 0)),
-            "subject": display_subject,
-            "subject_original": subj or "",
-            "teacher": teach or "",
-            "room": room or "",
-            "status": status,
-            "note": note,
-            "special": bool(is_special),
-        })
+      lessons.append({
+          "id": f"{x.get('id')}-{x.get('date')}-{x.get('startTime')}",
+          "date": date_iso,
+          "start": _hm(x.get("startTime", 0)),
+          "end": _hm(x.get("endTime", 0)),
+          # IMPORTANT: Leave 'subject' as the best live guess; mapping happens on the frontend
+          "subject": display_subject,
+          "subject_original": subj or "",
+          "teacher": teach or "",
+          "room": room or "",
+          "status": status,
+          "note": note,
+          "special": bool(is_special),
+      })
 
     return lessons
