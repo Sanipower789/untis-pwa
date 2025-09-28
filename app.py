@@ -63,7 +63,7 @@ def api_mappings():
 
 @app.route("/api/timetable")
 def api_timetable():
-    # optional ?weekStart=YYYY-MM-DD (Berlin time)
+    # optional ?weekStart=YYYY-MM-DD (Berlin time) overrides the auto logic
     qs = request.args.get("weekStart")
     if qs:
         try:
@@ -72,7 +72,13 @@ def api_timetable():
             return jsonify({"ok": False, "error": "bad weekStart; use YYYY-MM-DD"}), 400
     else:
         today = datetime.now(APP_TZ).date()
-        ws = _monday_of(today)
+        # Monday = 0, Saturday = 5, Sunday = 6
+        if today.weekday() in (5, 6):
+            # show NEXT week when it's Sat/Sun
+            ws = _monday_of(today) + timedelta(days=7)
+        else:
+            # show THIS week Mon–Fri
+            ws = _monday_of(today)
 
     lessons = fetch_week(ws)
     resp = jsonify({"ok": True, "weekStart": str(ws), "lessons": lessons})
