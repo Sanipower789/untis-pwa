@@ -1,4 +1,13 @@
-/* ====== PWA: „erst installieren, dann nutzen“ ====== */
+/* ====== Pure dictionary mapping front-end ======
+   - Fetch /api/mappings (rooms + courses)
+   - Fetch /api/timetable (live week)
+   - Map:
+       subject_display = courses[subject_original] || subject
+       room_display    = rooms[room] || room
+   - Week-agnostic. No IDs. No snapshots needed.
+================================================= */
+
+/* --- PWA install gate (kept) --- */
 const isStandalone = () =>
   window.matchMedia?.("(display-mode: standalone)").matches ||
   window.navigator.standalone === true;
@@ -27,7 +36,7 @@ const isStandalone = () =>
   }
 })();
 
-/* ====== LocalStorage ====== */
+/* --- LocalStorage --- */
 const LS_COURSES = "myCourses";
 const LS_NAME    = "myName";
 const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
@@ -35,85 +44,41 @@ const setCourses = (arr) => localStorage.setItem(LS_COURSES, JSON.stringify(arr 
 const getName    = () => localStorage.getItem(LS_NAME) || "";
 const setName    = (v) => localStorage.setItem(LS_NAME, v || "");
 
-/* ====== Helpers ====== */
+/* --- Helpers --- */
 const WEEKDAYS = ["Mo","Di","Mi","Do","Fr"];
 const parseHM = t => { const [h,m] = String(t).split(":").map(Number); return h*60+m; };
-const fmtHM = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
+const fmtHM   = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
 const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
-const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g," ").toLowerCase();
-const _key = (L) => `${L.date}|${L.start}|${_norm(L.subject_original ?? "")}`;
+const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g, " ").toLowerCase();
 
-/* ====== Mapping tables built from lessons_mapped.json ====== */
-const CourseMap = new Map(); // original subject -> pretty subject
-const RoomMap   = new Map(); // original room    -> pretty room (best-effort)
-const MapById   = new Map(); // lesson id        -> { subject, room }
-const MapByKey  = new Map(); // date|start|origSubject -> { subject, room }
-let mapsReady = false;
+/* --- Mapping dicts (filled from /api/mappings) --- */
+let COURSE_MAP = {};
+let ROOM_MAP   = {};
+let MAPS_READY = false;
 
-async function loadMaps() {
-  if (mapsReady) return;
-  try {
-    const res = await fetch(`/lessons_mapped.json?v=${Date.now()}`, { cache: "no-store" });
-    if (!res.ok) throw new Error("failed to load lessons_mapped.json");
-    const arr = await res.json();
-
-    for (const L of arr) {
-      const subjPretty = (L.subject ?? "").toString().trim();
-      const roomPretty = (L.room ?? "").toString().trim();
-      const subjOrig   = _norm(L.subject_original ?? "");
-
-      // 1) exact id index
-      if (L.id) MapById.set(String(L.id), { subject: subjPretty, room: roomPretty });
-
-      // 2) composite key index
-      const k = _key(L);
-      if (k && !MapByKey.has(k)) MapByKey.set(k, { subject: subjPretty, room: roomPretty });
-
-      // subject original -> pretty
-      if (subjOrig && subjPretty && !CourseMap.has(subjOrig)) CourseMap.set(subjOrig, subjPretty);
-
-      // room best-effort map (may be identical already; ok)
-      const roomOrigField = _norm(L.room_original ?? L.room ?? "");
-      if (roomOrigField && roomPretty && !RoomMap.has(roomOrigField)) RoomMap.set(roomOrigField, roomPretty);
-    }
-  } catch (e) {
-    console.warn("Mapping maps not loaded; proceeding with live labels only.", e);
-  } finally {
-    mapsReady = true;
-  }
+async function loadMappings() {
+  if (MAPS_READY) return;
+  const res = await fetch(`/api/mappings?v=${Date.now()}`, { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load /api/mappings");
+  const j = await res.json();
+  COURSE_MAP = j.courses || {};
+  ROOM_MAP   = j.rooms   || {};
+  MAPS_READY = true;
 }
 
-const mapSubject = (l) => {
-  const id = String(l.id ?? "");
-  if (id && MapById.has(id)) {
-    const v = MapById.get(id).subject;
-    if (v) return v;
-  }
-  const k = _key(l);
-  if (k && MapByKey.has(k)) {
-    const v = MapByKey.get(k).subject;
-    if (v) return v;
-  }
-  const key = _norm(l.subject_original ?? "");
-  return CourseMap.get(key) || (l.subject ?? "—");
-};
+/* --- Mapping functions (simple & deterministic) --- */
+function mapSubject(lesson) {
+  const orig = lesson.subject_original ?? lesson.subject ?? "";
+  const key  = _norm(orig);
+  return COURSE_MAP[key] || (lesson.subject ?? "—");
+}
+function mapRoom(lesson) {
+  const live = lesson.room ?? "";
+  const key  = _norm(live);
+  return ROOM_MAP[key] || live;
+}
 
-const mapRoom = (l) => {
-  const id = String(l.id ?? "");
-  if (id && MapById.has(id)) {
-    const v = MapById.get(id).room;
-    if (v) return v;
-  }
-  const k = _key(l);
-  if (k && MapByKey.has(k)) {
-    const v = MapByKey.get(k).room;
-    if (v) return v;
-  }
-  const key = _norm(l.room ?? "");
-  return RoomMap.get(key) || (l.room ?? "");
-};
-
-/* ====== Course selection ====== */
+/* --- Course selection UI --- */
 function buildCourseSelection(allLessons) {
   const cs       = document.getElementById("course-selection");
   const nameInput= document.getElementById("profile-name");
@@ -124,6 +89,7 @@ function buildCourseSelection(allLessons) {
 
   nameInput.value = getName();
 
+  // Build from mapped subject names
   const subjects = [...new Set(allLessons.map(mapSubject).filter(Boolean))]
     .sort((a,b)=>a.localeCompare(b,"de"));
 
@@ -163,21 +129,22 @@ function buildCourseSelection(allLessons) {
   }
 }
 
-/* ====== Grid render ====== */
+/* --- Grid render --- */
 function buildGrid(lessons) {
   const container = document.getElementById("timetable");
   container.innerHTML = "";
 
+  // Mon–Fri only + collect time boundaries
   const tset = new Set();
   const valid = [];
-  lessons.forEach(l => {
+  for (const l of lessons) {
     const d = dayIdxISO(l.date);
     if (d >= 1 && d <= 5) {
       valid.push(l);
       tset.add(parseHM(l.start));
       tset.add(parseHM(l.end));
     }
-  });
+  }
 
   const times = [...tset].sort((a,b)=>a-b);
   if (times.length < 2) {
@@ -199,6 +166,7 @@ function buildGrid(lessons) {
   grid.style.gridTemplateRows = [headerH + "px", ...rowHeights.map(h => h + "px")].join(" ");
   grid.style.gridTemplateColumns = "72px repeat(5, 1fr)";
 
+  // header
   const corner = document.createElement("div");
   corner.className = "hdr corner";
   corner.textContent = "Zeit";
@@ -210,6 +178,7 @@ function buildGrid(lessons) {
     grid.appendChild(h);
   }
 
+  // rows + empty slots
   for (let i = 0; i < times.length - 1; i++) {
     const startM = times[i];
     const endM   = times[i+1];
@@ -236,7 +205,8 @@ function buildGrid(lessons) {
     return Math.max(0, idx - 1);
   };
 
-  valid.forEach(l => {
+  // place lessons
+  for (const l of valid) {
     const day = dayIdxISO(l.date);
     const s = parseHM(l.start), e = parseHM(l.end);
     const r0 = rowIndexFor(s), r1 = rowIndexFor(e);
@@ -252,11 +222,11 @@ function buildGrid(lessons) {
       l.status === "vertretung" ? "⚠️ Vertretung" :
       l.status === "aenderung" ? "🟦 Änderung" : "";
 
-    const title = mapSubject(l);
-    const room  = mapRoom(l);
+    const subj = mapSubject(l);
+    const room = mapRoom(l);
 
     card.innerHTML = `
-      <div class="lesson-title">${title}</div>
+      <div class="lesson-title">${subj}</div>
       <div class="lesson-meta">
         ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
         ${room ? `<span>· ${room}</span>` : ""}
@@ -265,14 +235,14 @@ function buildGrid(lessons) {
       ${l.note ? `<div class="note">${l.note}</div>` : ""}
     `;
     grid.appendChild(card);
-  });
+  }
 
   container.appendChild(grid);
 }
 
-/* ====== Fetch + Auto-Refresh ====== */
+/* --- Fetch + refresh --- */
 async function loadTimetable(force=false){
-  await loadMaps();
+  await loadMappings();
 
   const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
   const data = await res.json();
