@@ -294,6 +294,43 @@ async function loadTimetable(force=false){
   buildGrid(lessons);
 }
 
+// ---- service worker auto-update glue ----
+if ("serviceWorker" in navigator) {
+  (async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("/sw.js");
+
+      // check now and every hour
+      reg.update();
+      setInterval(() => reg.update(), 60 * 60 * 1000);
+
+      // if a SW is already waiting → activate it
+      if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+
+      // when a new SW is found, tell it to skip waiting
+      reg.addEventListener("updatefound", () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener("statechange", () => {
+          if (sw.state === "installed" && navigator.serviceWorker.controller) {
+            sw.postMessage({ type: "SKIP_WAITING" });
+          }
+        });
+      });
+
+      // when controller changes → reload once to pick up fresh code
+      let hasReloaded = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (hasReloaded) return;
+        hasReloaded = true;
+        window.location.reload();
+      });
+    } catch (e) {
+      console.warn("SW registration failed:", e);
+    }
+  })();
+}
+
 document.addEventListener("DOMContentLoaded", ()=>{
   loadTimetable();
   setInterval(()=>loadTimetable(true), 5*60*1000);
