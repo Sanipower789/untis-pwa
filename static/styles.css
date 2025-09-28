@@ -131,58 +131,58 @@ button{
   pointer-events:none;
 }
 
-.ph-card{
+/* Placeholder box */
+.ph-card {
   display:flex;
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  gap:6px;
+  gap:4px;
 
   background:#1c1d22;
   border:1px solid #2b303a;
   border-radius:10px;
-  padding:10px 12px;
+  padding:8px 10px;
   margin:6px auto;
 
-  box-shadow:0 0 0 1px rgba(255,255,255,0.03) inset;
-  width:88%;
-  max-width:160px;
-  min-width:0;            /* allow text to shrink inside flex */
-}
-
-.ph-ico{
-  font-size:1.15rem;
-  line-height:1;
-  opacity:.9;
-}
-
-.ph-txt{
-  font-size:.88rem;
-  color:#a7aab1;
-  white-space:nowrap;     /* single line */
-  overflow:hidden;
-  text-overflow:ellipsis; /* … if tight */
-  letter-spacing:.1px;
+  width:90%;
+  max-width:140px;
   min-width:0;
+  box-shadow:0 0 0 1px rgba(255,255,255,.03) inset;
 }
 
-/* whole-week empty message */
-.empty-week {
-  display: grid;
-  place-items: center;
-  min-height: 40vh;
-  color: #9aa0a6;
-  padding: 12px;
+.ph-ico {
+  font-size:1.2rem;
+  line-height:1;
+  opacity:.95;
 }
 
-/* ===== Mobile tweaks ===== */
-@media (max-width: 425px){
-  .grid{
-    grid-template-columns: 60px repeat(5, minmax(0, 1fr));
+.ph-txt {
+  font-size:.85rem;
+  color:#a7aab1;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  text-align:center;
+}
+
+/* ---- mobile simplification ---- */
+@media (max-width:480px){
+  .ph-txt::after {
+    content: "Bald";
   }
-  .timecell{font-size:11px}
-  .lesson{font-size:11px;padding:6px}
-  .lesson-title{font-size:11.5px}
-  .lesson-meta{font-size:10.5px}
-  .ph-txt{ font-size:.84rem; }
+  .ph-txt {
+    visibility:hidden;
+    position:relative;
+  }
+  .ph-txt::after {
+    visibility:visible;
+    position:absolute;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    color:#a7aab1;
+    font-size:.85rem;
+  }
 }
