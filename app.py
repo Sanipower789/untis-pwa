@@ -16,12 +16,6 @@ def _norm(s: str) -> str:
     return " ".join((s or "").strip().split()).lower()
 
 def _parse_mapping(file_path: str) -> dict[str, str]:
-    """
-    Parse simple 'LEFT = RIGHT' mapping files.
-    - Ignores blank lines and lines starting with '#'
-    - Normalizes the LEFT key for robust lookups
-    - Skips pairs with empty RIGHT
-    """
     mapping: dict[str, str] = {}
     if not os.path.exists(file_path):
         return mapping
@@ -35,9 +29,7 @@ def _parse_mapping(file_path: str) -> dict[str, str]:
             left, right = line.split("=", 1)
             left = " ".join(left.strip().split())
             right = right.strip()
-            if not right:
-                # if you want to allow blanks (meaning "hide" or keep as-is), drop this guard
-                continue
+            # NEW: allow blanks, map to empty string
             mapping[_norm(left)] = right
     return mapping
 
