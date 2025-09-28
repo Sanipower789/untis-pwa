@@ -147,6 +147,7 @@ button{
   place-items: center;
   min-height: 40vh;
   color: #9aa0a6;
+  padding: 12px;
 }
 
 /* ===== Mobile tweaks ===== */

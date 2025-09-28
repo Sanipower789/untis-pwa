@@ -7,6 +7,24 @@
    - Week-agnostic. No IDs. No snapshots needed.
 ================================================= */
 
+// ---- dev safety net: show runtime errors on the page ----
+(function () {
+  const show = (title, detail) => {
+    const pre = document.createElement("pre");
+    pre.id = "fatal-overlay";
+    pre.style.cssText = `
+      position:fixed;left:8px;right:8px;bottom:8px;z-index:99999;
+      background:#1b1c20;border:1px solid #3a3f4a;border-radius:10px;
+      color:#ffb4b4;padding:10px;max-height:40vh;overflow:auto;
+      font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;`;
+    pre.textContent = `${title}\n${detail || ""}`;
+    document.body.appendChild(pre);
+  };
+  window.__showFatal = show;
+  window.addEventListener("error", (e) => show("JS-Fehler:", e.message + "\n" + (e.error?.stack || "")));
+  window.addEventListener("unhandledrejection", (e) => show("Promise-Fehler:", String(e.reason)));
+})();
+
 /* --- PWA install gate (kept) --- */
 const isStandalone = () =>
   window.matchMedia?.("(display-mode: standalone)").matches ||
@@ -267,31 +285,45 @@ function buildGrid(lessons) {
 }
 
 /* --- Fetch + refresh --- */
-async function loadTimetable(force=false){
-  await loadMappings();
+async function loadTimetable(force = false) {
+  try {
+    await loadMappings();
 
-  const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
-  const data = await res.json();
-  let lessons = data.lessons || [];
+    const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`/api/timetable ${res.status}`);
+    const data = await res.json();
+    let lessons = Array.isArray(data.lessons) ? data.lessons : [];
 
-  const cs = document.getElementById("course-selection");
-  if (cs && !cs.dataset.init){
-    buildCourseSelection(lessons);
-    cs.dataset.init = "1";
+    const cs = document.getElementById("course-selection");
+    if (cs && !cs.dataset.init) {
+      buildCourseSelection(lessons);
+      cs.dataset.init = "1";
+    }
+
+    const selected = new Set(getCourses());
+    if (selected.size > 0) {
+      lessons = lessons.filter((l) => selected.has(mapSubject(l)));
+    }
+
+    lessons.sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      if (a.start !== b.start) return a.start.localeCompare(b.start);
+      return mapSubject(a).localeCompare(mapSubject(b), "de");
+    });
+
+    buildGrid(lessons);
+  } catch (err) {
+    // show friendly fallback instead of blank screen
+    const container = document.getElementById("timetable");
+    if (container) {
+      container.innerHTML = `
+        <div class="empty-week">
+          ⏳ Keine Daten geladen (offline oder Fehler).
+        </div>`;
+    }
+    if (window.__showFatal) window.__showFatal("Ladefehler", String(err));
+    console.error(err);
   }
-
-  const selected = new Set(getCourses());
-  if (selected.size > 0) {
-    lessons = lessons.filter(l => selected.has(mapSubject(l)));
-  }
-
-  lessons.sort((a,b)=>{
-    if (a.date!==b.date)   return a.date.localeCompare(b.date);
-    if (a.start!==b.start) return a.start.localeCompare(b.start);
-    return mapSubject(a).localeCompare(mapSubject(b), "de");
-  });
-
-  buildGrid(lessons);
 }
 
 // ---- service worker auto-update glue ----
