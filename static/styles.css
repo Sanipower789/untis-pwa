@@ -120,25 +120,64 @@ button{
   text-overflow: ellipsis;
 }
 
-/* ===== Placeholders ===== */
-.placeholder-day {
-  white-space: nowrap;      /* keep text on one line */
-  text-overflow: ellipsis;  /* truncate if too long */
-  overflow: hidden;
-  font-size: 0.8rem;
+/* —— Placeholder card (empty day) —— */
+.placeholder-day{
   display:flex;
   align-items:center;
   justify-content:center;
-  color:#9aa0a6;
-  background:#15161a;
-  border-radius:8px;
-  padding:6px;
-  margin:4px;
-  z-index:2;
-  pointer-events:none;
-  width:100%;          /* don’t let it stretch column */
-  height:80px;         /* fixed size, not whole column */
-  justify-self:center;
+  width:100%;
+  /* the row span is set in JS; this just centers the card */
+}
+
+/* the little card inside the column */
+.ph-card{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+
+  background:#1c1d22;
+  border:1px solid #2b303a;
+  border-radius:10px;
+  padding:10px 12px;
+  margin:6px auto;
+
+  box-shadow:0 0 0 1px rgba(255,255,255,0.03) inset;
+  max-width: 160px;        /* keeps it slim so column never looks wider */
+  width: 88%;
+}
+
+.ph-ico{
+  font-size:1.15rem;
+  line-height:1;
+  opacity:.9;
+}
+
+.ph-txt{
+  font-size:.88rem;
+  color:#a7aab1;
+  white-space:nowrap;      /* no wrap in the column */
+  overflow:hidden;
+  text-overflow:ellipsis;
+  letter-spacing:.1px;
+}
+
+/* Tiny phones: shorter copy for extra cleanliness */
+@media (max-width:420px){
+  .ph-txt::after{
+    content: "Bald verf\u00FCgbar";
+  }
+  /* hide original text while keeping DOM/ARIA intact */
+  .ph-txt{
+    font-size:.85rem;
+    color:#9aa0a6;
+  }
+  .ph-txt { visibility:hidden; position:relative; }
+  .ph-txt::after{
+    visibility:visible; position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+  }
 }
 
 /* whole-week empty message */

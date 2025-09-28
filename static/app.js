@@ -277,8 +277,11 @@ function buildGrid(lessons) {
     placeholder.className = "placeholder-day";
     placeholder.style.gridColumn = String(d + 1);
     placeholder.style.gridRow = `2 / -1`; // full column (below header)
-    placeholder.innerHTML = `⏳ <span>Bald verfügbar</span>`;
-    grid.appendChild(placeholder);
+    placeholder.innerHTML = `
+      <div class="ph-card" role="status" aria-label="Daten folgen">
+        <div class="ph-ico" aria-hidden="true">⏳</div>
+        <div class="ph-txt">Bald verfügbar</div>
+      </div>`;
   }
 
   container.appendChild(grid);
