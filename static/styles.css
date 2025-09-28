@@ -126,6 +126,8 @@ button{
 }
 
 .placeholder-day {
+  z-index: 2;            /* sit above .slot cells */
+  pointer-events: none;  /* clicks pass through */
   display: grid;
   place-items: center;
   font-size: 0.95rem;

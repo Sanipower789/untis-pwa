@@ -256,7 +256,7 @@ function buildGrid(lessons) {
       const placeholder = document.createElement("div");
       placeholder.className = "placeholder-day";
       placeholder.style.gridColumn = String(d + 1);
-      placeholder.style.gridRow = `2 / ${rowHeights.length + 2}`;
+      placeholder.style.gridRow = `2 / -1`;   // span from first time row to the end
       placeholder.innerHTML = `⏳ <span>Die Daten für diesen Tag kommen bald.</span>`;
       grid.appendChild(placeholder);
     }
