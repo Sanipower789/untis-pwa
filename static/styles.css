@@ -126,7 +126,9 @@ button{
   align-items:center;
   justify-content:center;
   width:100%;
-  /* the row span is set in JS; this just centers the card */
+  padding:6px 4px;
+  z-index:2;
+  pointer-events:none;
 }
 
 /* the little card inside the column */
@@ -144,8 +146,8 @@ button{
   margin:6px auto;
 
   box-shadow:0 0 0 1px rgba(255,255,255,0.03) inset;
-  max-width: 160px;        /* keeps it slim so column never looks wider */
-  width: 88%;
+  max-width:160px;
+  width:88%;
 }
 
 .ph-ico{
@@ -154,30 +156,10 @@ button{
   opacity:.9;
 }
 
-.ph-txt{
-  font-size:.88rem;
-  color:#a7aab1;
-  white-space:nowrap;      /* no wrap in the column */
-  overflow:hidden;
-  text-overflow:ellipsis;
-  letter-spacing:.1px;
-}
-
-/* Tiny phones: shorter copy for extra cleanliness */
-@media (max-width:420px){
-  .ph-txt::after{
-    content: "Bald verf\u00FCgbar";
-  }
-  /* hide original text while keeping DOM/ARIA intact */
-  .ph-txt{
-    font-size:.85rem;
-    color:#9aa0a6;
-  }
-  .ph-txt { visibility:hidden; position:relative; }
-  .ph-txt::after{
-    visibility:visible; position:absolute; inset:0;
-    display:flex; align-items:center; justify-content:center;
-  }
+.ph-line {
+  font-size: .9rem;
+  color: #a7aab1;
+  line-height: 1.2;
 }
 
 /* whole-week empty message */
@@ -192,11 +174,11 @@ button{
 /* ===== Mobile tweaks ===== */
 @media (max-width: 425px){
   .grid{
-    grid-template-columns: 60px repeat(5, 1fr); /* still equal cols but smaller */
+    grid-template-columns: 60px repeat(5, 1fr);
   }
   .timecell{font-size:11px}
   .lesson{font-size:11px;padding:6px}
   .lesson-title{font-size:11.5px}
   .lesson-meta{font-size:10.5px}
-  .ph-txt{ font-size:.85rem; }
+  .ph-txt{ font-size:.84rem; }
 }
