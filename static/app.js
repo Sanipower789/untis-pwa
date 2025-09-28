@@ -158,14 +158,15 @@ function buildGrid(lessons) {
   const times = [...tset].sort((a, b) => a - b);
   if (times.length < 2) {
     container.innerHTML = `
-      <div class="empty-week">
-        ⏳ Die Daten für diese Woche kommen bald.
-      </div>`;
+      <div class="empty-week">⏳ Die Daten für diese Woche kommen bald.</div>`;
     return;
   }
 
+  // figure out which weekdays actually have lessons
+  const daysWithLessons = new Set(valid.map(l => dayIdxISO(l.date)));
+
   const ROW_NORMAL = 72;
-  const ROW_BREAK = 36;
+  const ROW_BREAK  = 36;
   const rowHeights = [];
   for (let i = 0; i < times.length - 1; i++) {
     const duration = times[i + 1] - times[i];
@@ -190,10 +191,10 @@ function buildGrid(lessons) {
     grid.appendChild(h);
   }
 
-  // Time rows + empty slots
+  // Time rows + slots (skip slots entirely for empty days)
   for (let i = 0; i < times.length - 1; i++) {
     const startM = times[i];
-    const endM = times[i + 1];
+    const endM   = times[i + 1];
 
     const timeCell = document.createElement("div");
     timeCell.className = "timecell";
@@ -203,6 +204,8 @@ function buildGrid(lessons) {
     grid.appendChild(timeCell);
 
     for (let d = 1; d <= 5; d++) {
+      if (!daysWithLessons.has(d)) continue; // <-- no cells under empty day
+
       const slot = document.createElement("div");
       slot.className = "slot";
       slot.style.gridColumn = String(d + 1);
@@ -249,17 +252,15 @@ function buildGrid(lessons) {
     grid.appendChild(card);
   });
 
-  // Placeholder for empty weekdays
+  // Clean placeholder for empty weekdays (no grid underneath)
   for (let d = 1; d <= 5; d++) {
-    const hasDay = valid.some(l => dayIdxISO(l.date) === d);
-    if (!hasDay) {
-      const placeholder = document.createElement("div");
-      placeholder.className = "placeholder-day";
-      placeholder.style.gridColumn = String(d + 1);
-      placeholder.style.gridRow = `2 / -1`;   // span from first time row to the end
-      placeholder.innerHTML = `⏳ <span>Die Daten für diesen Tag kommen bald.</span>`;
-      grid.appendChild(placeholder);
-    }
+    if (daysWithLessons.has(d)) continue;
+    const placeholder = document.createElement("div");
+    placeholder.className = "placeholder-day";
+    placeholder.style.gridColumn = String(d + 1);
+    placeholder.style.gridRow = `2 / -1`; // full column (below header)
+    placeholder.innerHTML = `⏳ <span>Die Daten für diesen Tag kommen bald.</span>`;
+    grid.appendChild(placeholder);
   }
 
   container.appendChild(grid);

@@ -126,21 +126,22 @@ button{
 }
 
 .placeholder-day {
-  z-index: 2;            /* sit above .slot cells */
-  pointer-events: none;  /* clicks pass through */
   display: grid;
   place-items: center;
   font-size: 0.95rem;
-  color: #888;
-  border: 2px dashed #2a2a2a;
+  color: #9aa0a6;
+  background: #15161a;   /* solid background to hide any grid */
+  border: none;          /* no dashed border */
   border-radius: 10px;
-  background: rgba(255,255,255,0.02);
   padding: 8px;
   margin: 4px;
+  z-index: 2;
+  pointer-events: none;
 }
+
 .empty-week {
   display: grid;
   place-items: center;
   min-height: 40vh;
-  color: #888;
+  color: #9aa0a6;
 }
