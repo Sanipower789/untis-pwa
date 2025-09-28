@@ -45,7 +45,8 @@ const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
 const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g," ").toLowerCase();
 
 const CourseMap = new Map();   // key: original subject -> pretty subject
-const RoomMap   = new Map();   // key: original room    -> pretty room
+const RoomMap   = new Map();   // key: original room    -> pretty room (best-effort)
+const MapById   = new Map();   // key: lesson id        -> { subject, room } from mapped file
 let mapsReady = false;
 
 async function loadMaps() {
@@ -56,14 +57,16 @@ async function loadMaps() {
     const arr = await res.json();
 
     for (const L of arr) {
+      // 1) exact mapping by lesson id
+      if (L.id) MapById.set(String(L.id), { subject: L.subject ?? "", room: L.room ?? "" });
+
+      // 2) subject map: original -> pretty (for weeks not present in mapped file)
       const subjOrig = _norm(L.subject_original ?? "");
       const subjPretty = (L.subject ?? "").toString().trim();
       if (subjOrig && subjPretty && !CourseMap.has(subjOrig)) CourseMap.set(subjOrig, subjPretty);
 
-      const roomOrig = _norm(L.room ?? "");   // mapped file stores final room in 'room'; some entries may have empty room
+      // 3) room map (best-effort). mapped file often only has final room; still index for consistency.
       const roomPretty = (L.room ?? "").toString().trim();
-      // If the mapped file contained an original room (older versions),
-      // you could also support L.room_original here:
       const roomOrigField = _norm(L.room_original ?? L.room ?? "");
       if (roomOrigField && roomPretty && !RoomMap.has(roomOrigField)) RoomMap.set(roomOrigField, roomPretty);
     }
@@ -75,12 +78,15 @@ async function loadMaps() {
 }
 
 const mapSubject = (l) => {
-  // Prefer explicit mapping based on original
+  const byId = MapById.get(String(l.id));
+  if (byId && byId.subject) return byId.subject;  // id match wins
   const key = _norm(l.subject_original ?? "");
   return CourseMap.get(key) || (l.subject ?? "—");
 };
 
 const mapRoom = (l) => {
+  const byId = MapById.get(String(l.id));
+  if (byId && byId.room) return byId.room;        // id match wins
   const key = _norm(l.room ?? "");
   return RoomMap.get(key) || (l.room ?? "");
 };
