@@ -1,6 +1,5 @@
-const CACHE = "untis-cache-v23";
-// cache a tiny core; app.js & styles load fast anyway
-const CORE = ["/", "/api/timetable"];
+const CACHE = "untis-cache-v24"; // bump!
+const CORE = ["/", "/api/timetable", "/lessons_mapped.json"];
 
 self.addEventListener("install", (e)=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(CORE)));
@@ -17,12 +16,10 @@ self.addEventListener("activate", (e)=>{
 self.addEventListener("fetch", (event)=>{
   const url = new URL(event.request.url);
 
-  // network-first for API (fresh data), fall back to cache if offline
   if (url.pathname.startsWith("/api/")) {
     event.respondWith((async () => {
       try {
-        const fresh = await fetch(event.request, { cache: 'no-store' });
-        return fresh;
+        return await fetch(event.request, { cache: 'no-store' });
       } catch (e) {
         const cached = await caches.match(event.request);
         return cached || new Response(JSON.stringify({ ok:true, lessons:[] }), {
@@ -33,6 +30,6 @@ self.addEventListener("fetch", (event)=>{
     return;
   }
 
-  // cache-first for everything else (simple)
+  // cache-first for static (incl. lessons_mapped.json)
   event.respondWith(caches.match(event.request).then(r => r || fetch(event.request)));
 });

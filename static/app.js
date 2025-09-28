@@ -28,7 +28,7 @@ const isStandalone = () =>
 })();
 
 /* ====== LocalStorage ====== */
-const LS_COURSES = "myCourses";      // store SELECTED PRETTY SUBJECT NAMES
+const LS_COURSES = "myCourses";
 const LS_NAME    = "myName";
 const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
 const setCourses = (arr) => localStorage.setItem(LS_COURSES, JSON.stringify(arr || []));
@@ -40,13 +40,14 @@ const WEEKDAYS = ["Mo","Di","Mi","Do","Fr"];
 const parseHM = t => { const [h,m] = String(t).split(":").map(Number); return h*60+m; };
 const fmtHM = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
 const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
-
-// --- Mapping from lessons_mapped.json ---
 const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g," ").toLowerCase();
+const _key = (L) => `${L.date}|${L.start}|${_norm(L.subject_original ?? "")}`;
 
-const CourseMap = new Map();   // key: original subject -> pretty subject
-const RoomMap   = new Map();   // key: original room    -> pretty room (best-effort)
-const MapById   = new Map();   // key: lesson id        -> { subject, room } from mapped file
+/* ====== Mapping tables built from lessons_mapped.json ====== */
+const CourseMap = new Map(); // original subject -> pretty subject
+const RoomMap   = new Map(); // original room    -> pretty room (best-effort)
+const MapById   = new Map(); // lesson id        -> { subject, room }
+const MapByKey  = new Map(); // date|start|origSubject -> { subject, room }
 let mapsReady = false;
 
 async function loadMaps() {
@@ -57,16 +58,21 @@ async function loadMaps() {
     const arr = await res.json();
 
     for (const L of arr) {
-      // 1) exact mapping by lesson id
-      if (L.id) MapById.set(String(L.id), { subject: L.subject ?? "", room: L.room ?? "" });
-
-      // 2) subject map: original -> pretty (for weeks not present in mapped file)
-      const subjOrig = _norm(L.subject_original ?? "");
       const subjPretty = (L.subject ?? "").toString().trim();
+      const roomPretty = (L.room ?? "").toString().trim();
+      const subjOrig   = _norm(L.subject_original ?? "");
+
+      // 1) exact id index
+      if (L.id) MapById.set(String(L.id), { subject: subjPretty, room: roomPretty });
+
+      // 2) composite key index
+      const k = _key(L);
+      if (k && !MapByKey.has(k)) MapByKey.set(k, { subject: subjPretty, room: roomPretty });
+
+      // subject original -> pretty
       if (subjOrig && subjPretty && !CourseMap.has(subjOrig)) CourseMap.set(subjOrig, subjPretty);
 
-      // 3) room map (best-effort). mapped file often only has final room; still index for consistency.
-      const roomPretty = (L.room ?? "").toString().trim();
+      // room best-effort map (may be identical already; ok)
       const roomOrigField = _norm(L.room_original ?? L.room ?? "");
       if (roomOrigField && roomPretty && !RoomMap.has(roomOrigField)) RoomMap.set(roomOrigField, roomPretty);
     }
@@ -78,15 +84,31 @@ async function loadMaps() {
 }
 
 const mapSubject = (l) => {
-  const byId = MapById.get(String(l.id));
-  if (byId && byId.subject) return byId.subject;  // id match wins
+  const id = String(l.id ?? "");
+  if (id && MapById.has(id)) {
+    const v = MapById.get(id).subject;
+    if (v) return v;
+  }
+  const k = _key(l);
+  if (k && MapByKey.has(k)) {
+    const v = MapByKey.get(k).subject;
+    if (v) return v;
+  }
   const key = _norm(l.subject_original ?? "");
   return CourseMap.get(key) || (l.subject ?? "—");
 };
 
 const mapRoom = (l) => {
-  const byId = MapById.get(String(l.id));
-  if (byId && byId.room) return byId.room;        // id match wins
+  const id = String(l.id ?? "");
+  if (id && MapById.has(id)) {
+    const v = MapById.get(id).room;
+    if (v) return v;
+  }
+  const k = _key(l);
+  if (k && MapByKey.has(k)) {
+    const v = MapByKey.get(k).room;
+    if (v) return v;
+  }
   const key = _norm(l.room ?? "");
   return RoomMap.get(key) || (l.room ?? "");
 };
@@ -102,12 +124,10 @@ function buildCourseSelection(allLessons) {
 
   nameInput.value = getName();
 
-  // Build unique list from PRETTY mapped subjects
   const subjects = [...new Set(allLessons.map(mapSubject).filter(Boolean))]
     .sort((a,b)=>a.localeCompare(b,"de"));
 
   const saved = new Set(getCourses());
-
   box.innerHTML = "";
   subjects.forEach(sub => {
     const id = "sub_" + sub.replace(/\W+/g,"_");
@@ -148,7 +168,6 @@ function buildGrid(lessons) {
   const container = document.getElementById("timetable");
   container.innerHTML = "";
 
-  // Mon–Fri only
   const tset = new Set();
   const valid = [];
   lessons.forEach(l => {
@@ -180,7 +199,6 @@ function buildGrid(lessons) {
   grid.style.gridTemplateRows = [headerH + "px", ...rowHeights.map(h => h + "px")].join(" ");
   grid.style.gridTemplateColumns = "72px repeat(5, 1fr)";
 
-  // Header row
   const corner = document.createElement("div");
   corner.className = "hdr corner";
   corner.textContent = "Zeit";
@@ -192,7 +210,6 @@ function buildGrid(lessons) {
     grid.appendChild(h);
   }
 
-  // Time rows + empty slots
   for (let i = 0; i < times.length - 1; i++) {
     const startM = times[i];
     const endM   = times[i+1];
@@ -219,7 +236,6 @@ function buildGrid(lessons) {
     return Math.max(0, idx - 1);
   };
 
-  // Place lessons
   valid.forEach(l => {
     const day = dayIdxISO(l.date);
     const s = parseHM(l.start), e = parseHM(l.end);
@@ -256,20 +272,18 @@ function buildGrid(lessons) {
 
 /* ====== Fetch + Auto-Refresh ====== */
 async function loadTimetable(force=false){
-  await loadMaps(); // ensure mapping tables are ready
+  await loadMaps();
 
   const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
   const data = await res.json();
   let lessons = data.lessons || [];
 
-  // Build the selection UI once using mapped PRETTY subjects
   const cs = document.getElementById("course-selection");
   if (cs && !cs.dataset.init){
     buildCourseSelection(lessons);
     cs.dataset.init = "1";
   }
 
-  // Filter by selected PRETTY names only
   const selected = new Set(getCourses());
   if (selected.size > 0) {
     lessons = lessons.filter(l => selected.has(mapSubject(l)));
@@ -284,11 +298,8 @@ async function loadTimetable(force=false){
   buildGrid(lessons);
 }
 
-// init
 document.addEventListener("DOMContentLoaded", ()=>{
   loadTimetable();
-  // refresh every 5 minutes
   setInterval(()=>loadTimetable(true), 5*60*1000);
-  // refresh on tab focus
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });
