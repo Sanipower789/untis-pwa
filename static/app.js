@@ -368,8 +368,20 @@ if ("serviceWorker" in navigator) {
   })();
 }
 
-document.addEventListener("DOMContentLoaded", ()=>{
-  loadTimetable();
+document.addEventListener("DOMContentLoaded", () => {
+  const refreshBtn = document.getElementById("refresh-btn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = "⏳";
+      loadTimetable(true).finally(() => {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = "🔄";
+      });
+    });
+  }
+
+  loadTimetable(); // dein bisheriger Autostart
   setInterval(()=>loadTimetable(true), 5*60*1000);
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });

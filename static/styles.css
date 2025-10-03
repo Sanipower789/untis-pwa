@@ -186,3 +186,24 @@ button{
     font-size:.85rem;
   }
 }
+
+.header-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+#refresh-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: #fff;
+  padding: 4px;
+  line-height: 1;
+}
+
+#refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
