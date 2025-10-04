@@ -143,19 +143,32 @@ function uniqCasefold(arr) {
   return out;
 }
 
-// Prefer curated RHS display names from mapping; fallback to lessons if mapping is empty
+// Prefer curated RHS display names from mapping,
+// then add any subjects found in the current lessons that aren't covered.
 function subjectsForSelection(allLessons) {
-  const mappingVals = Object.values(COURSE_MAP)
+  // 1) Start with all display names from course_mapping.txt (RHS, non-empty)
+  const mapped = Object.values(COURSE_MAP)
     .map(v => (v == null ? "" : String(v).trim()))
     .filter(v => v.length > 0);
 
-  if (mappingVals.length > 0) {
-    return uniqCasefold(mappingVals).sort((a,b)=>a.localeCompare(b,'de'));
+  // casefold set for dedupe (German collation)
+  const seen = new Set(mapped.map(v => v.toLocaleLowerCase('de')));
+
+  // 2) Add extra subjects from lessons (already mapped via mapSubject),
+  //    but only if they’re not already covered by mapping RHS
+  const extras = [];
+  for (const l of allLessons) {
+    const s = mapSubject(l);
+    if (!s) continue;
+    const k = s.toLocaleLowerCase('de');
+    if (!seen.has(k)) {
+      seen.add(k);
+      extras.push(s);
+    }
   }
 
-  // Fallback: mapped subjects from lessons
-  const fromLessons = allLessons.map(l => mapSubject(l)).filter(Boolean);
-  return uniqCasefold(fromLessons).sort((a,b)=>a.localeCompare(b,'de'));
+  // 3) Final list = mapping labels first (your curated names), then extras
+  return [...mapped, ...extras].sort((a,b)=>a.localeCompare(b,'de'));
 }
 
 /* ===== Sidebar (Klausuren) ===== */
