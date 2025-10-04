@@ -45,6 +45,25 @@ def _no_store(resp):
 COURSE_MAP_PATH = os.path.join(DATA, "course_mapping.txt")
 ROOM_MAP_PATH   = os.path.join(DATA, "rooms_mapping.txt")
 
+def load_mapping_txt(path):
+    """Return dict {lhs(normalized or raw key): rhs(display)} including empty rhs."""
+    data = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                if "=" not in s:
+                    continue
+                lhs, rhs = s.split("=", 1)
+                lhs = lhs.strip()
+                rhs = rhs.strip()
+                data[lhs] = rhs
+    except FileNotFoundError:
+        pass
+    return data
+
 def _parse_mapping(file_path: str) -> dict[str, str]:
     """Read key=value lines; index by normalised key on the left. Empty right is allowed."""
     mapping: dict[str, str] = {}

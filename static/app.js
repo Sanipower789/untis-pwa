@@ -85,6 +85,7 @@ const normKey = (s) => {
 let COURSE_MAP = {};
 let ROOM_MAP   = {};
 let MAPS_READY = false;
+let COURSE_LIST_FULL = null;s
 
 async function loadMappings() {
   if (MAPS_READY) return;
@@ -143,14 +144,24 @@ function uniqCasefold(arr) {
   return out;
 }
 
-// OLD-STYLE: build list from *mapped subjects in the loaded lessons only*
 function subjectsForSelection(allLessons) {
-  const set = new Set();
+  // Primary: use full RHS from backend
+  let base = Array.isArray(COURSE_LIST_FULL) && COURSE_LIST_FULL.length
+    ? COURSE_LIST_FULL.slice()
+    : Object.values(COURSE_MAP)
+        .map(v => (v == null ? "" : String(v).trim()))
+        .filter(v => v.length > 0);
+
+  // Add any mapped subjects seen in current lessons that aren’t in the base yet
+  const seen = new Set(base.map(v => v.toLocaleLowerCase('de')));
   for (const l of allLessons) {
     const s = mapSubject(l);
-    if (s) set.add(s);
+    if (!s) continue;
+    const k = s.toLocaleLowerCase('de');
+    if (!seen.has(k)) { seen.add(k); base.push(s); }
   }
-  return Array.from(set).sort((a,b)=>a.localeCompare(b,'de'));
+
+  return base.sort((a,b)=>a.localeCompare(b,'de'));
 }
 
 /* ===== Sidebar (Klausuren) ===== */
@@ -454,6 +465,15 @@ function buildGrid(lessons) {
 async function loadTimetable(force = false) {
   try {
     await loadMappings();
+    
+    try {
+      const r = await fetch(`/api/mappings_full?v=${Date.now()}`, { cache: "no-store" });
+      if (r.ok) {
+        const jf = await r.json();
+        if (Array.isArray(jf.courses_full)) COURSE_LIST_FULL = jf.courses_full;
+      }
+    } catch (e) { /* ignore; fallback logic will handle it */ }
+
 
     const res = await fetch(`/api/timetable?ts=${Date.now()}${force ? "&force=1":""}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`/api/timetable ${res.status}`);
