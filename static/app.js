@@ -85,7 +85,7 @@ const normKey = (s) => {
 let COURSE_MAP = {};
 let ROOM_MAP   = {};
 let MAPS_READY = false;
-let COURSE_LIST_FULL = null;s
+let COURSE_LIST_FULL = null;
 
 async function loadMappings() {
   if (MAPS_READY) return;
