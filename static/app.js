@@ -96,6 +96,20 @@ async function loadMappings() {
   MAPS_READY = true;
 }
 
+// Build a complete subject list: lessons + mapping values
+function allKnownSubjects(lessons) {
+  // subjects from lessons (already mapped via mapSubject)
+  const fromLessons = new Set(
+    lessons.map(l => mapSubject(l) || l.subject || l.subject_original).filter(Boolean)
+  );
+  // subjects from mapping values (display names)
+  const fromMappings = new Set(
+    Object.values(COURSE_MAP).filter(v => v !== null && v !== undefined && String(v).trim() !== "")
+  );
+  // union + sort (German collation)
+  return [...new Set([...fromLessons, ...fromMappings])].sort((a,b)=>a.localeCompare(b,'de'));
+}
+
 /* Backward-compatible lookup: try strong norm, then your previous _norm, then raw */
 function lookup(map, raw) {
   const nk = normKey(raw);
@@ -227,7 +241,7 @@ function populateKlausurSubjects(lessons) {
 function populateKlausurPeriods(lessons) {
   let maxP = 0;
   lessons.forEach(l => { if (Number.isFinite(l.period)) maxP = Math.max(maxP, l.period); });
-  if (!maxP) maxP = 10;
+  if (!maxP) maxP = 8;
   selPeriod.innerHTML = Array.from({length:maxP}, (_,i)=>i+1)
     .map(p => `<option value="${p}">${p}. Stunde</option>`).join('');
 }
@@ -239,12 +253,12 @@ function buildCourseSelection(allLessons) {
   const box      = document.getElementById("courses");
   const editBtn  = document.getElementById("edit-courses");
   const saveBtn  = document.getElementById("save-courses");
+
   if (!cs || !nameInput || !box || !saveBtn || !editBtn) return;
 
   nameInput.value = getName();
 
-  const subjects = [...new Set(allLessons.map(mapSubject).filter(Boolean))]
-    .sort((a,b)=>a.localeCompare(b,"de"));
+  const subjects = allKnownSubjects(allLessons);
 
   const saved = new Set(getCourses());
   box.innerHTML = "";
