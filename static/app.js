@@ -145,23 +145,27 @@ function uniqCasefold(arr) {
 }
 
 function subjectsForSelection(allLessons) {
-  // Primary: use full RHS from backend
+  // Primary: use full RHS from backend if available
   let base = Array.isArray(COURSE_LIST_FULL) && COURSE_LIST_FULL.length
     ? COURSE_LIST_FULL.slice()
     : Object.values(COURSE_MAP)
         .map(v => (v == null ? "" : String(v).trim()))
         .filter(v => v.length > 0);
 
-  // Add any mapped subjects seen in current lessons that aren’t in the base yet
   const seen = new Set(base.map(v => v.toLocaleLowerCase('de')));
+
+  // Add any subjects from current lessons that aren’t already in the list
   for (const l of allLessons) {
-    const s = mapSubject(l);
-    if (!s) continue;
-    const k = s.toLocaleLowerCase('de');
-    if (!seen.has(k)) { seen.add(k); base.push(s); }
+    const subj = mapSubject(l);
+    if (!subj) continue;
+    const k = subj.toLocaleLowerCase('de');
+    if (!seen.has(k)) {
+      seen.add(k);
+      base.push(subj);
+    }
   }
 
-  return base.sort((a,b)=>a.localeCompare(b,'de'));
+  return base.sort((a, b) => a.localeCompare(b, 'de'));
 }
 
 /* ===== Sidebar (Klausuren) ===== */
