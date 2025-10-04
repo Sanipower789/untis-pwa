@@ -47,7 +47,9 @@ PHYSIKSAAL 2 = A-29
 PHYSIKSAAL 3 - OSW = A-25
 Raum mit Smartboard = A-K21
 Sport-späte Zeit-Sporthalle 1.Drittel =
+Sport-späte Zeit-Sporthalle 2.Drittel =
 SPORTHALLE 1.DRITT =
 SPORTHALLE 2.DRITT =
 SPORTHALLE 3.DRITT =
 WERKRAUM I, GESAMT, Kunstraum 2 = K-02
+neuer Klassenraum 2025
