@@ -86,33 +86,6 @@ let COURSE_MAP = {};
 let ROOM_MAP   = {};
 let MAPS_READY = false;
 
-// Try to fetch and parse the raw mapping file directly (frontend-only fallback)
-async function hydrateCourseMapFromText() {
-  const tryUrls = ["/course_mapping.txt", "/static/course_mapping.txt"];
-  for (const url of tryUrls) {
-    try {
-      const res = await fetch(`${url}?v=${Date.now()}`, { cache: "no-store" });
-      if (!res.ok) continue;
-      const txt = await res.text();
-      // parse lines: left = key (ignored here), right = display (RHS)
-      txt.split(/\r?\n/).forEach(line => {
-        const s = line.trim();
-        if (!s || s.startsWith("#")) return;
-        const i = s.indexOf("=");
-        if (i === -1) return;
-        const rhs = s.slice(i + 1).trim();        // display name
-        const lhs = s.slice(0, i).trim().toLowerCase(); // normalized key-ish
-        if (rhs.length === 0) return; // empty RHS = hidden → skip in selection
-        // only add if not already present from /api/mappings
-        if (!(lhs in COURSE_MAP)) {
-          COURSE_MAP[lhs] = rhs;
-        }
-      });
-      return; // stop after first successful file
-    } catch (_) { /* try next */ }
-  }
-}
-
 async function loadMappings() {
   if (MAPS_READY) return;
   const res = await fetch(`/api/mappings?v=${Date.now()}`, { cache: "no-store" });
@@ -170,22 +143,14 @@ function uniqCasefold(arr) {
   return out;
 }
 
-// Prefer curated RHS display names from mapping,
-// then add any subjects found in the current lessons that aren't covered.
+// OLD-STYLE: build list from *mapped subjects in the loaded lessons only*
 function subjectsForSelection(allLessons) {
-  const mapped = Object.values(COURSE_MAP)
-    .map(v => (v == null ? "" : String(v).trim()))
-    .filter(v => v.length > 0);
-
-  // also add any mapped subjects seen in current lessons that aren't in the mapping yet
-  const seen = new Set(mapped.map(v => v.toLocaleLowerCase('de')));
+  const set = new Set();
   for (const l of allLessons) {
-    const s = (l && (l.subject_display || mapSubject(l))) || "";
-    if (!s) continue;
-    const k = s.toLocaleLowerCase('de');
-    if (!seen.has(k)) { seen.add(k); mapped.push(s); }
+    const s = mapSubject(l);
+    if (s) set.add(s);
   }
-  return mapped.sort((a,b)=>a.localeCompare(b,'de'));
+  return Array.from(set).sort((a,b)=>a.localeCompare(b,'de'));
 }
 
 /* ===== Sidebar (Klausuren) ===== */
@@ -489,7 +454,6 @@ function buildGrid(lessons) {
 async function loadTimetable(force = false) {
   try {
     await loadMappings();
-    await hydrateCourseMapFromText(); // ensure we include ALL labels from course_mapping.txt
 
     const res = await fetch(`/api/timetable?ts=${Date.now()}${force ? "&force=1":""}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`/api/timetable ${res.status}`);
