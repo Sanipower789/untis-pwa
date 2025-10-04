@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin Login</title>
+  <style>
+    body{font-family:system-ui;background:#0f0f10;color:#fff;margin:0;display:grid;place-items:center;min-height:100vh}
+    .card{background:#16171b;border:1px solid #2b303a;border-radius:12px;padding:18px;min-width:300px}
+    input[type=password],button{width:100%;padding:10px;border-radius:8px;border:1px solid #3a3f4a;background:#1d1e23;color:#fff}
+    button{background:#1976d2;border:none;margin-top:10px;font-weight:700}
+    .err{color:#ff9d9d;margin-top:8px}
+  </style>
+</head>
+<body>
+  <form class="card" method="post">
+    <h2>Admin Login</h2>
+    <input type="password" name="token" placeholder="Admin-Token" />
+    {% if error %}<div class="err">{{error}}</div>{% endif %}
+    <button type="submit">Anmelden</button>
+  </form>
+</body>
+</html>
