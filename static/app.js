@@ -1,15 +1,7 @@
-/* ====== Pure dictionary mapping front-end ======
-   - Fetch /api/mappings (rooms + courses)
-   - Fetch /api/timetable (live week)
-   - Map:
-       subject_display = courses[subject_original] || subject
-       room_display    = rooms[room] || room
-   - Week-agnostic. No IDs. No snapshots needed.
-================================================= */
-
-// ---- dev safety net: show runtime errors on the page ----
 (function () {
   const show = (title, detail) => {
+    const preOld = document.getElementById("fatal-overlay");
+    if (preOld) preOld.remove();
     const pre = document.createElement("pre");
     pre.id = "fatal-overlay";
     pre.style.cssText = `
@@ -67,7 +59,25 @@ const WEEKDAYS = ["Mo","Di","Mi","Do","Fr"];
 const parseHM = t => { const [h,m] = String(t).split(":").map(Number); return h*60+m; };
 const fmtHM   = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
 const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
+
+/* Simple normaliser you already had */
 const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g, " ").toLowerCase();
+
+/* Strong canonical normaliser (umlauts, (), dashes, tags, numbers, spaces) */
+const normKey = (s) => {
+  if (!s) return "";
+  s = String(s)
+        .trim()
+        .replaceAll("ä","a").replaceAll("ö","o").replaceAll("ü","u")
+        .replaceAll("Ä","a").replaceAll("Ö","o").replaceAll("Ü","u")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .replace(/\(.*?\)/g, " ")
+        .replace(/\s*-\s*.*$/g, " ")
+        .replace(/\b(gk|lk|ag)\b/g, " ")
+        .replace(/\b\d+\b/g, " ");
+  return s.replace(/\s+/g, " ").trim();
+};
 
 /* --- Mapping dicts (filled from /api/mappings) --- */
 let COURSE_MAP = {};
@@ -84,24 +94,33 @@ async function loadMappings() {
   MAPS_READY = true;
 }
 
-/* --- Mapping functions (simple & deterministic) --- */
+/* Backward-compatible lookup: try strong norm, then your previous _norm, then raw */
+function lookup(map, raw) {
+  const nk = normKey(raw);
+  if (Object.prototype.hasOwnProperty.call(map, nk)) return map[nk];
+
+  const sk = _norm(raw);
+  if (Object.prototype.hasOwnProperty.call(map, sk)) return map[sk];
+
+  const rk = String(raw ?? "").trim();
+  if (Object.prototype.hasOwnProperty.call(map, rk)) return map[rk];
+
+  return undefined;
+}
+
+/* --- Mapping functions --- */
 function mapSubject(lesson) {
   const orig = lesson.subject_original ?? lesson.subject ?? "";
-  const key  = _norm(orig);
-  // important: allow empty string mappings if you ever add them
-  if (Object.prototype.hasOwnProperty.call(COURSE_MAP, key)) {
-    return COURSE_MAP[key];
-  }
+  const val = lookup(COURSE_MAP, orig);
+  if (val !== undefined && val !== null && val !== "") return val;
   return lesson.subject ?? "—";
 }
 
 function mapRoom(lesson) {
   const live = lesson.room ?? "";
-  const key  = _norm(live);
-  // important: allow "" to pass through (don’t fallback to live)
-  if (Object.prototype.hasOwnProperty.call(ROOM_MAP, key)) {
-    return ROOM_MAP[key];
-  }
+  const val = lookup(ROOM_MAP, live);
+  // empty string means “hide room” by design
+  if (val !== undefined && val !== null) return val;
   return live;
 }
 
@@ -175,8 +194,7 @@ function buildGrid(lessons) {
 
   const times = [...tset].sort((a, b) => a - b);
   if (times.length < 2) {
-    container.innerHTML = `
-      <div class="empty-week">⏳ Bald verfügbar</div>`;
+    container.innerHTML = `<div class="empty-week">⏳ Bald verfügbar</div>`;
     return;
   }
 
@@ -222,7 +240,7 @@ function buildGrid(lessons) {
     grid.appendChild(timeCell);
 
     for (let d = 1; d <= 5; d++) {
-      if (!daysWithLessons.has(d)) continue; // <-- no cells under empty day
+      if (!daysWithLessons.has(d)) continue; // no cells under empty day
 
       const slot = document.createElement("div");
       slot.className = "slot";
@@ -272,21 +290,22 @@ function buildGrid(lessons) {
 
   // Clean placeholder for empty weekdays (no grid underneath)
   for (let d = 1; d <= 5; d++) {
-  if (daysWithLessons.has(d)) continue;
-  const placeholder = document.createElement("div");
-  placeholder.className = "placeholder-day";
-  placeholder.style.gridColumn = String(d + 1);
-  placeholder.style.gridRow = `2 / -1`; // full column
-  placeholder.innerHTML = `
-    <div class="ph-card" role="status" aria-label="Daten folgen">
-      <div class="ph-ico">⏳</div>
-      <div class="ph-txt">Bald verfügbar</div>
-    </div>
-  `;
-
-  grid.appendChild(placeholder); // ✅ add it to the grid
+    if (daysWithLessons.has(d)) continue;
+    const placeholder = document.createElement("div");
+    placeholder.className = "placeholder-day";
+    placeholder.style.gridColumn = String(d + 1);
+    placeholder.style.gridRow = `2 / -1`; // full column
+    placeholder.innerHTML = `
+      <div class="ph-card" role="status" aria-label="Daten folgen">
+        <div class="ph-ico">⏳</div>
+        <div class="ph-txt">Bald verfügbar</div>
+      </div>
+    `;
+    grid.appendChild(placeholder);
   }
-  container.appendChild(grid);
+
+  const containerEl = document.getElementById("timetable");
+  containerEl.appendChild(grid);
 }
 
 /* --- Fetch + refresh --- */
@@ -318,7 +337,6 @@ async function loadTimetable(force = false) {
 
     buildGrid(lessons);
   } catch (err) {
-    // show friendly fallback instead of blank screen
     const container = document.getElementById("timetable");
     if (container) {
       container.innerHTML = `
@@ -331,7 +349,7 @@ async function loadTimetable(force = false) {
   }
 }
 
-// ---- service worker auto-update glue ----
+/* --- service worker auto-update glue --- */
 if ("serviceWorker" in navigator) {
   (async () => {
     try {
@@ -381,7 +399,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  loadTimetable(); // dein bisheriger Autostart
+  loadTimetable(); // autostart
   setInterval(()=>loadTimetable(true), 5*60*1000);
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });

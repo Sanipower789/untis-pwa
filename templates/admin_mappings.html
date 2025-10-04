@@ -5,26 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mappings verwalten</title>
   <style>
-    :root{--bg:#0f0f10;--ink:#f2f3f5;--card:#16171b;--muted:#a7aab1;--line:#2b303a;--good:#2e7d32;--btn:#1976d2}
+    :root{--bg:#0f0f10;--ink:#f2f3f5;--card:#16171b;--muted:#a7aab1;--line:#2b303a;--btn:#1976d2}
     *{box-sizing:border-box}
     body{font-family:system-ui;background:var(--bg);color:var(--ink);margin:0}
     header{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#14151a;border-bottom:1px solid var(--line)}
     .wrap{padding:14px 16px}
     .row{display:flex;gap:12px;flex-wrap:wrap}
-    .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;flex:1 1 420px;min-width:320px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;flex:1 1 460px;min-width:320px}
     h2{margin:.2rem 0 .8rem}
     table{width:100%;border-collapse:separate;border-spacing:0 6px}
-    th,td{font-size:13px;vertical-align:middle}
+    th,td{font-size:13px;vertical-align:top}
     th{color:var(--muted);text-align:left}
     td.key{color:#cdd0d6}
+    .variants{font-size:12px;color:#98a0ab;margin-top:4px}
     input.map{width:100%;padding:8px;border-radius:8px;border:1px solid #3a3f4a;background:#1d1e23;color:#fff}
-    .bar{display:flex;gap:8px;margin:8px 0}
+    .bar{display:flex;gap:8px;margin:8px 0;align-items:center}
+    .pill{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:#cbd0d8}
+    .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
     button{background:var(--btn);border:none;color:#fff;font-weight:700;border-radius:10px;padding:8px 12px;cursor:pointer}
-    .muted{color:var(--muted)}
-    .ok{color:#9be69b}
-    .pill{display:inline-block;padding:2px 6px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:#cbd0d8}
-    .foot{display:flex;justify-content:flex-end;margin-top:10px}
     .logout{background:#2b303a}
+    .muted{opacity:.6}
   </style>
 </head>
 <body>
@@ -42,9 +42,10 @@
       <div class="bar">
         <span class="pill" id="sub-count"></span>
         <span class="pill" id="sub-unmapped"></span>
+        <label class="pill"><input type="checkbox" id="only-unmapped-sub" checked> nur offene</label>
       </div>
       <table id="sub-table">
-        <thead><tr><th style="width:45%">Original</th><th>Anzeige-Name</th></tr></thead>
+        <thead><tr><th style="width:45%">Normalisierter Schlüssel</th><th>Anzeige-Name</th></tr></thead>
         <tbody></tbody>
       </table>
       <div class="foot"><button id="save-sub">Speichern</button></div>
@@ -55,9 +56,10 @@
       <div class="bar">
         <span class="pill" id="room-count"></span>
         <span class="pill" id="room-unmapped"></span>
+        <label class="pill"><input type="checkbox" id="only-unmapped-room" checked> nur offene</label>
       </div>
       <table id="room-table">
-        <thead><tr><th style="width:45%">Original</th><th>Anzeige-Name (leer = ausblenden)</th></tr></thead>
+        <thead><tr><th style="width:45%">Normalisierter Schlüssel</th><th>Anzeige-Name (leer = ausblenden)</th></tr></thead>
         <tbody></tbody>
       </table>
       <div class="foot"><button id="save-room">Speichern</button></div>
@@ -71,71 +73,90 @@ const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 
 const state = {
   courses: {}, rooms: {},
-  seen_subjects: [], seen_rooms: []
+  subjects_grouped: {}, rooms_grouped: {},
+  unmapped_subjects: [], unmapped_rooms: []
 };
+
+function rowHTML(nk, variants, currentValue, isMapped){
+  return `
+    <tr class="${isMapped ? 'muted' : ''}">
+      <td class="key">
+        <code>${nk || "—"}</code>
+        <div class="variants">${variants.map(v => `<span>${v}</span>`).join(", ")}</div>
+      </td>
+      <td><input class="map" data-nk="${nk}" value="${(currentValue||"").replace(/"/g,"&quot;")}" placeholder="${isMapped? '(mapped)' : 'Anzeigename…'}"></td>
+    </tr>
+  `;
+}
 
 async function loadState(){
   const r = await fetch("/api/admin/state", {cache:"no-store"});
-  if(!r.ok){ alert("Unauthorized or error."); location.href="/admin/login"; return; }
+  if (!r.ok){ alert("Unauthorized or Fehler."); location.href="/admin/login"; return; }
   const j = await r.json();
-  if(!j.ok){ alert(j.error||"Error"); return; }
-  state.courses = j.courses||{};
-  state.rooms = j.rooms||{};
-  state.seen_subjects = j.seen_subjects||[];
-  state.seen_rooms = j.seen_rooms||[];
+  if (!j.ok){ alert(j.error||"Fehler"); return; }
 
-  $("#sub-count").textContent = `${state.seen_subjects.length} gesehen`;
-  $("#room-count").textContent = `${state.seen_rooms.length} gesehen`;
-  $("#sub-unmapped").textContent = `${(j.unmapped_subjects||[]).length} offen`;
-  $("#room-unmapped").textContent = `${(j.unmapped_rooms||[]).length} offen`;
+  state.courses = j.courses || {};
+  state.rooms = j.rooms || {};
+  state.subjects_grouped = j.subjects_grouped || {};
+  state.rooms_grouped = j.rooms_grouped || {};
+  state.unmapped_subjects = j.unmapped_subjects || [];
+  state.unmapped_rooms = j.unmapped_rooms || [];
 
-  renderTable("sub-table", state.seen_subjects, state.courses);
-  renderTable("room-table", state.seen_rooms, state.rooms);
+  $("#sub-count").textContent  = `${Object.keys(state.subjects_grouped).length} Schlüssel`;
+  $("#room-count").textContent = `${Object.keys(state.rooms_grouped).length} Schlüssel`;
+  $("#sub-unmapped").textContent  = `${state.unmapped_subjects.length} offen`;
+  $("#room-unmapped").textContent = `${state.unmapped_rooms.length} offen`;
+
+  renderTables();
 }
 
-function renderTable(tid, seenArr, mapObj){
-  const tb = $("#"+tid+" tbody");
-  tb.innerHTML = "";
-  for(const key of seenArr){
-    const tr = document.createElement("tr");
-    const tdKey = document.createElement("td");
-    tdKey.className = "key";
-    tdKey.textContent = key;
-    const tdVal = document.createElement("td");
-    const val = mapObj[key] ?? "";
-    tdVal.innerHTML = `<input class="map" data-key="${key}" value="${val.replace(/"/g,"&quot;")}">`;
-    tr.appendChild(tdKey); tr.appendChild(tdVal);
-    tb.appendChild(tr);
-  }
+function renderTables(){
+  // subjects
+  const onlyOpenSub = $("#only-unmapped-sub").checked;
+  const subTB = $("#sub-table tbody");
+  subTB.innerHTML = "";
+  Object.keys(state.subjects_grouped).sort().forEach(nk=>{
+    const isMapped = Object.prototype.hasOwnProperty.call(state.courses, nk);
+    if (onlyOpenSub && isMapped) return;
+    subTB.insertAdjacentHTML(
+      "beforeend",
+      rowHTML(nk, state.subjects_grouped[nk], state.courses[nk] || "", isMapped)
+    );
+  });
+
+  // rooms
+  const onlyOpenRm = $("#only-unmapped-room").checked;
+  const rmTB = $("#room-table tbody");
+  rmTB.innerHTML = "";
+  Object.keys(state.rooms_grouped).sort().forEach(nk=>{
+    const isMapped = Object.prototype.hasOwnProperty.call(state.rooms, nk);
+    if (onlyOpenRm && isMapped) return;
+    rmTB.insertAdjacentHTML(
+      "beforeend",
+      rowHTML(nk, state.rooms_grouped[nk], state.rooms[nk] || "", isMapped)
+    );
+  });
 }
 
 async function save(kind){
   const tableId = kind === "courses" ? "sub-table" : "room-table";
   const inputs = $$("#"+tableId+" input.map");
-  const payload = {};
-  for(const inp of inputs){
-    const key = inp.getAttribute("data-key");
-    payload[key] = inp.value; // empty allowed for rooms
-  }
-  const body = {};
-  body[kind] = payload;
-
+  const out = {};
+  for (const inp of inputs) out[inp.dataset.nk] = inp.value; // empty allowed
   const r = await fetch("/api/admin/save", {
     method: "POST",
     headers: {"content-type":"application/json"},
-    body: JSON.stringify(body)
+    body: JSON.stringify({ [kind]: out })
   });
   const j = await r.json();
-  if(j.ok){
-    alert("Gespeichert.");
-    loadState();
-  }else{
-    alert(j.error||"Fehler beim Speichern");
-  }
+  if (j.ok) { alert("Gespeichert."); loadState(); }
+  else { alert(j.error||"Fehler beim Speichern"); }
 }
 
 $("#save-sub").onclick = () => save("courses");
 $("#save-room").onclick = () => save("rooms");
+$("#only-unmapped-sub").onchange = renderTables;
+$("#only-unmapped-room").onchange = renderTables;
 
 loadState();
 </script>
