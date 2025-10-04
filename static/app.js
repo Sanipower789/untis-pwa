@@ -96,33 +96,14 @@ async function loadMappings() {
   MAPS_READY = true;
 }
 
-// Build a complete subject list: lessons + mapping values + mapping keys
-function allKnownSubjects(lessons) {
-  const fromLessons = new Set(
-    lessons.map(l => mapSubject(l) || l.subject || l.subject_original).filter(Boolean)
-  );
-  const fromMappingsValues = new Set(
-    Object.values(COURSE_MAP).filter(v => v !== null && v !== undefined && String(v).trim() !== "")
-  );
-  const fromMappingsKeys = new Set(
-    Object.keys(COURSE_MAP).filter(k => k && String(k).trim() !== "")
-  );
-
-  return [...new Set([...fromLessons, ...fromMappingsValues, ...fromMappingsKeys])]
-    .sort((a,b)=>a.localeCompare(b,'de'));
-}
-
 /* Backward-compatible lookup: try strong norm, then your previous _norm, then raw */
 function lookup(map, raw) {
   const nk = normKey(raw);
   if (Object.prototype.hasOwnProperty.call(map, nk)) return map[nk];
-
   const sk = _norm(raw);
   if (Object.prototype.hasOwnProperty.call(map, sk)) return map[sk];
-
   const rk = String(raw ?? "").trim();
   if (Object.prototype.hasOwnProperty.call(map, rk)) return map[rk];
-
   return undefined;
 }
 
@@ -151,7 +132,33 @@ const KlausurenStore = {
 };
 const uid = () => Math.random().toString(36).slice(2,10);
 
-/* Sidebar wiring */
+/* ===== Subject list for course selection ===== */
+function uniqCasefold(arr) {
+  const seen = new Set(), out = [];
+  for (const v of arr) {
+    const k = String(v).trim().toLocaleLowerCase('de');
+    if (!k || seen.has(k)) continue;
+    seen.add(k); out.push(v);
+  }
+  return out;
+}
+
+// Prefer curated RHS display names from mapping; fallback to lessons if mapping is empty
+function subjectsForSelection(allLessons) {
+  const mappingVals = Object.values(COURSE_MAP)
+    .map(v => (v == null ? "" : String(v).trim()))
+    .filter(v => v.length > 0);
+
+  if (mappingVals.length > 0) {
+    return uniqCasefold(mappingVals).sort((a,b)=>a.localeCompare(b,'de'));
+  }
+
+  // Fallback: mapped subjects from lessons
+  const fromLessons = allLessons.map(l => mapSubject(l)).filter(Boolean);
+  return uniqCasefold(fromLessons).sort((a,b)=>a.localeCompare(b,'de'));
+}
+
+/* ===== Sidebar (Klausuren) ===== */
 const elSidebar      = document.getElementById('sidebar');
 const btnSidebar     = document.getElementById('btnSidebar');
 const btnSidebarClose= document.getElementById('sidebarClose');
@@ -192,15 +199,10 @@ formKlausur?.addEventListener('submit', (e) => {
     period: parseInt(selPeriod.value, 10)  // 1..N
   };
   if (!item.subject || !item.name || !item.date || !item.period) return;
-  // prevent duplicates on same date+period
   const dup = KlausurenStore.find(item.date, item.period);
-  if (dup) {
-    alert("Für dieses Datum und diese Stunde existiert bereits eine Klausur.");
-    return;
-  }
+  if (dup) { alert("Für dieses Datum und diese Stunde existiert bereits eine Klausur."); return; }
   KlausurenStore.add(item);
   renderKlausurList();
-  // Refresh grid so replacement appears
   if (window.__latestLessons) buildGrid(window.__latestLessons);
 });
 
@@ -234,6 +236,7 @@ function renderKlausurList() {
 }
 
 function populateKlausurSubjects(lessons) {
+  // uses the lessons currently shown (already filtered by selected courses)
   const set = new Set();
   lessons.forEach(l => { const m = mapSubject(l); if (m) set.add(m); });
   const items = Array.from(set).sort((a,b)=>a.localeCompare(b,'de'));
@@ -243,7 +246,7 @@ function populateKlausurSubjects(lessons) {
 function populateKlausurPeriods(lessons) {
   let maxP = 0;
   lessons.forEach(l => { if (Number.isFinite(l.period)) maxP = Math.max(maxP, l.period); });
-  if (!maxP) maxP = 8;
+  if (!maxP || maxP > 8) maxP = 8; // cap at 8
   selPeriod.innerHTML = Array.from({length:maxP}, (_,i)=>i+1)
     .map(p => `<option value="${p}">${p}. Stunde</option>`).join('');
 }
@@ -255,12 +258,12 @@ function buildCourseSelection(allLessons) {
   const box      = document.getElementById("courses");
   const editBtn  = document.getElementById("edit-courses");
   const saveBtn  = document.getElementById("save-courses");
-
   if (!cs || !nameInput || !box || !saveBtn || !editBtn) return;
 
   nameInput.value = getName();
 
-  const subjects = allKnownSubjects(allLessons);
+  // *** FIX: full list from mapping RHS (fallback to lessons if mapping empty)
+  const subjects = subjectsForSelection(allLessons);
 
   const saved = new Set(getCourses());
   box.innerHTML = "";
@@ -480,7 +483,6 @@ async function loadTimetable(force = false) {
     });
 
     buildGrid(lessons);
-    // keep sidebar dropdowns fresh while open
     if (elSidebar?.classList.contains('show')) {
       populateKlausurSubjects(lessons);
       populateKlausurPeriods(lessons);
