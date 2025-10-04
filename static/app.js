@@ -61,8 +61,6 @@ const parseHM = t => { const [h,m] = String(t).split(":").map(Number); return h*
 const fmtHM   = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
 const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-/* Simple normaliser you already had */
 const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g, " ").toLowerCase();
 
 /* Strong canonical normaliser (umlauts, (), dashes, tags, numbers, spaces) */
@@ -81,11 +79,10 @@ const normKey = (s) => {
   return s.replace(/\s+/g, " ").trim();
 };
 
-/* --- Mapping dicts (filled from /api/mappings) --- */
+/* --- Mapping dicts for timetable rendering (from /api/mappings) --- */
 let COURSE_MAP = {};
 let ROOM_MAP   = {};
 let MAPS_READY = false;
-let COURSE_LIST_FULL = null;
 
 async function loadMappings() {
   if (MAPS_READY) return;
@@ -97,7 +94,7 @@ async function loadMappings() {
   MAPS_READY = true;
 }
 
-/* Backward-compatible lookup: try strong norm, then your previous _norm, then raw */
+/* Lookup: strong norm -> soft norm -> raw */
 function lookup(map, raw) {
   const nk = normKey(raw);
   if (Object.prototype.hasOwnProperty.call(map, nk)) return map[nk];
@@ -108,7 +105,7 @@ function lookup(map, raw) {
   return undefined;
 }
 
-/* --- Mapping helpers --- */
+/* Mapping helpers for rendering */
 function mapSubject(lesson) {
   const orig = lesson.subject_original ?? lesson.subject ?? "";
   const val = lookup(COURSE_MAP, orig);
@@ -133,39 +130,53 @@ const KlausurenStore = {
 };
 const uid = () => Math.random().toString(36).slice(2,10);
 
-/* ===== Subject list for course selection ===== */
-function uniqCasefold(arr) {
-  const seen = new Set(), out = [];
-  for (const v of arr) {
-    const k = String(v).trim().toLocaleLowerCase('de');
-    if (!k || seen.has(k)) continue;
-    seen.add(k); out.push(v);
+/* ============ COURSE SELECTION from course_mapping.txt ONLY ============ */
+let COURSE_LABELS = null; // array of RHS labels (display names)
+
+/** Fetch RHS labels from the raw mapping text file. */
+async function loadCourseLabelsFromTxt() {
+  if (Array.isArray(COURSE_LABELS) && COURSE_LABELS.length) return COURSE_LABELS;
+  const tryUrls = ["/static/course_mapping.txt", "/course_mapping.txt"];
+  const labels = [];
+  for (const url of tryUrls) {
+    try {
+      const res = await fetch(`${url}?v=${Date.now()}`, { cache: "no-store" });
+      if (!res.ok) continue;
+      const txt = await res.text();
+      txt.split(/\r?\n/).forEach(line => {
+        const s = line.trim();
+        if (!s || s.startsWith("#")) return;
+        const i = s.indexOf("=");
+        if (i === -1) return;
+        const rhs = s.slice(i + 1).trim(); // display name
+        if (rhs.length > 0) labels.push(rhs);
+      });
+      break; // stop after first successful read
+    } catch (_) { /* try next */ }
   }
-  return out;
+  // case-insensitive dedupe + sort
+  const seen = new Set();
+  COURSE_LABELS = labels.filter(v=>{
+    const k = v.toLocaleLowerCase('de');
+    if (seen.has(k)) return false;
+    seen.add(k); return true;
+  }).sort((a,b)=>a.localeCompare(b,'de'));
+  return COURSE_LABELS;
 }
 
-function subjectsForSelection(allLessons) {
-  // Primary: use full RHS from backend if available
-  let base = Array.isArray(COURSE_LIST_FULL) && COURSE_LIST_FULL.length
-    ? COURSE_LIST_FULL.slice()
-    : Object.values(COURSE_MAP)
-        .map(v => (v == null ? "" : String(v).trim()))
-        .filter(v => v.length > 0);
+/** Build the subjects list for the selection pane. */
+async function subjectsForSelection(allLessons) {
+  // 1) Prefer the labels from course_mapping.txt
+  const labels = await loadCourseLabelsFromTxt();
+  if (labels && labels.length) return labels.slice();
 
-  const seen = new Set(base.map(v => v.toLocaleLowerCase('de')));
-
-  // Add any subjects from current lessons that aren’t already in the list
+  // 2) Fallback: use mapped subjects from current lessons (if TXT not reachable)
+  const set = new Set();
   for (const l of allLessons) {
-    const subj = mapSubject(l);
-    if (!subj) continue;
-    const k = subj.toLocaleLowerCase('de');
-    if (!seen.has(k)) {
-      seen.add(k);
-      base.push(subj);
-    }
+    const s = mapSubject(l);
+    if (s) set.add(s);
   }
-
-  return base.sort((a, b) => a.localeCompare(b, 'de'));
+  return Array.from(set).sort((a,b)=>a.localeCompare(b,'de'));
 }
 
 /* ===== Sidebar (Klausuren) ===== */
@@ -246,7 +257,7 @@ function renderKlausurList() {
 }
 
 function populateKlausurSubjects(lessons) {
-  // uses the lessons currently shown (already filtered by selected courses)
+  // uses lessons currently shown (filtered by user's selection)
   const set = new Set();
   lessons.forEach(l => { const m = mapSubject(l); if (m) set.add(m); });
   const items = Array.from(set).sort((a,b)=>a.localeCompare(b,'de'));
@@ -272,18 +283,18 @@ function buildCourseSelection(allLessons) {
 
   nameInput.value = getName();
 
-  // *** FIX: full list from mapping RHS (fallback to lessons if mapping empty)
-  const subjects = subjectsForSelection(allLessons);
-
-  const saved = new Set(getCourses());
-  box.innerHTML = "";
-  subjects.forEach(sub => {
-    const id = "sub_" + sub.replace(/\W+/g,"_");
-    const label = document.createElement("label");
-    label.className = "chk";
-    label.innerHTML =
-      `<input type="checkbox" id="${id}" value="${escapeHtml(sub)}" ${saved.has(sub)?"checked":""}> <span>${escapeHtml(sub)}</span>`;
-    box.appendChild(label);
+  // subjects from course_mapping.txt (fallback to lessons if TXT missing)
+  subjectsForSelection(allLessons).then(subjects => {
+    const saved = new Set(getCourses());
+    box.innerHTML = "";
+    subjects.forEach(sub => {
+      const id = "sub_" + sub.replace(/\W+/g,"_");
+      const label = document.createElement("label");
+      label.className = "chk";
+      label.innerHTML =
+        `<input type="checkbox" id="${id}" value="${escapeHtml(sub)}" ${saved.has(sub)?"checked":""}> <span>${escapeHtml(sub)}</span>`;
+      box.appendChild(label);
+    });
   });
 
   saveBtn.onclick = () => {
@@ -336,7 +347,6 @@ function buildGrid(lessons) {
     return;
   }
 
-  // which weekdays actually have lessons
   const daysWithLessons = new Set(valid.map(l => dayIdxISO(l.date)));
 
   const ROW_NORMAL = 72;
@@ -400,10 +410,9 @@ function buildGrid(lessons) {
     const r0 = rowIndexFor(s), r1 = rowIndexFor(e);
     const span = Math.max(1, r1 - r0);
 
-    // Try to infer numeric period index from start row (1-based)
     let periodNum = l.period;
     if (!Number.isFinite(periodNum)) {
-      periodNum = r0 + 1; // basic mapping: first slot of the day = 1. Stunde
+      periodNum = r0 + 1; // first slot of the day = 1. Stunde
     }
 
     const klausur = KlausurenStore.find(l.date, periodNum);
@@ -469,15 +478,6 @@ function buildGrid(lessons) {
 async function loadTimetable(force = false) {
   try {
     await loadMappings();
-    
-    try {
-      const r = await fetch(`/api/mappings_full?v=${Date.now()}`, { cache: "no-store" });
-      if (r.ok) {
-        const jf = await r.json();
-        if (Array.isArray(jf.courses_full)) COURSE_LIST_FULL = jf.courses_full;
-      }
-    } catch (e) { /* ignore; fallback logic will handle it */ }
-
 
     const res = await fetch(`/api/timetable?ts=${Date.now()}${force ? "&force=1":""}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`/api/timetable ${res.status}`);

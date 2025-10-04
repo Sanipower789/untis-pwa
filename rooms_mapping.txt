@@ -52,4 +52,4 @@ SPORTHALLE 1.DRITT =
 SPORTHALLE 2.DRITT =
 SPORTHALLE 3.DRITT =
 WERKRAUM I, GESAMT, Kunstraum 2 = K-02
-neuer Klassenraum 2025
+neuer Klassenraum 2025 = B-F1
