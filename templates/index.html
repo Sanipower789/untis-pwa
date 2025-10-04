@@ -5,10 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mein Stundenplan</title>
 
-  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=22">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=23">
   <meta name="theme-color" content="#6a1b9a" />
-
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=22">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=23">
 </head>
 <body>
 
@@ -25,25 +24,67 @@
     </div>
   </div>
 
+  <!-- Topbar -->
   <header>
-    <h1>Mein Stundenplan</h1>
+    <div class="left">
+      <button id="btnSidebar" class="hamburger" aria-label="Menü" title="Menü">
+        <span></span><span></span><span></span>
+      </button>
+      <h1>Mein Stundenplan</h1>
+    </div>
     <div class="header-actions">
       <button id="edit-courses">Kurse bearbeiten</button>
       <button id="refresh-btn" title="Neu laden">🔄</button>
     </div>
   </header>
 
+  <!-- Slide-in Sidebar -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <h2>Menü</h2>
+      <button id="sidebarClose" class="plain" aria-label="Schließen" title="Schließen">×</button>
+    </div>
+    <nav class="sidebar-nav">
+      <button id="navKlausuren" class="sidebar-link active">Klausuren</button>
+      <!-- future: more sections -->
+    </nav>
+
+    <!-- Klausuren Panel -->
+    <section id="panelKlausuren" class="sidebar-panel">
+      <h3>Klausuren verwalten</h3>
+      <form id="klausurForm" class="form">
+        <label>Fach
+          <select id="klausurSubject" required></select>
+        </label>
+        <label>Name
+          <input id="klausurName" type="text" placeholder="z. B. Grammatik-Test" required />
+        </label>
+        <label>Datum
+          <input id="klausurDate" type="date" required />
+        </label>
+        <label>Stunde (Periode)
+          <select id="klausurPeriod" required></select>
+        </label>
+        <div class="row">
+          <button type="submit" class="primary">Speichern</button>
+          <button type="button" id="klausurReset" class="plain">Neu</button>
+        </div>
+      </form>
+
+      <h4>Geplante Klausuren</h4>
+      <div id="klausurList" class="klausur-list"></div>
+    </section>
+  </aside>
+
   <main>
     <!-- Kurs-Auswahl -->
     <section id="course-selection" class="card" style="display:none;">
       <h2>Kurse auswählen</h2>
-
       <div class="row">
         <label for="profile-name">Dein Name:</label>
         <input id="profile-name" type="text" placeholder="z. B. Sani">
         <button id="save-courses">Speichern</button>
       </div>
-
       <p class="muted">Wähle bis zu 12 Kurse.</p>
       <div id="courses" class="courses"></div>
     </section>
@@ -52,10 +93,10 @@
     <section id="timetable"></section>
   </main>
 
-  <script src="{{ url_for('static', filename='app.js') }}?v=22"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=23"></script>
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=22");
+      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=23");
     }
   </script>
 </body>

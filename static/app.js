@@ -1,3 +1,4 @@
+/* ===== fatal overlay ===== */
 (function () {
   const show = (title, detail) => {
     const preOld = document.getElementById("fatal-overlay");
@@ -17,7 +18,7 @@
   window.addEventListener("unhandledrejection", (e) => show("Promise-Fehler:", String(e.reason)));
 })();
 
-/* --- PWA install gate (kept) --- */
+/* --- PWA install gate --- */
 const isStandalone = () =>
   window.matchMedia?.("(display-mode: standalone)").matches ||
   window.navigator.standalone === true;
@@ -46,7 +47,7 @@ const isStandalone = () =>
   }
 })();
 
-/* --- LocalStorage --- */
+/* --- LocalStorage (profile) --- */
 const LS_COURSES = "myCourses";
 const LS_NAME    = "myName";
 const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
@@ -59,6 +60,7 @@ const WEEKDAYS = ["Mo","Di","Mi","Do","Fr"];
 const parseHM = t => { const [h,m] = String(t).split(":").map(Number); return h*60+m; };
 const fmtHM   = mins => `${String(Math.floor(mins/60)).padStart(2,"0")}:${String(mins%60).padStart(2,"0")}`;
 const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 /* Simple normaliser you already had */
 const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g, " ").toLowerCase();
@@ -108,23 +110,129 @@ function lookup(map, raw) {
   return undefined;
 }
 
-/* --- Mapping functions --- */
+/* --- Mapping helpers --- */
 function mapSubject(lesson) {
   const orig = lesson.subject_original ?? lesson.subject ?? "";
   const val = lookup(COURSE_MAP, orig);
   if (val !== undefined && val !== null && val !== "") return val;
   return lesson.subject ?? "—";
 }
-
 function mapRoom(lesson) {
   const live = lesson.room ?? "";
   const val = lookup(ROOM_MAP, live);
-  // empty string means “hide room” by design
-  if (val !== undefined && val !== null) return val;
+  if (val !== undefined && val !== null) return val; // empty string hides room
   return live;
 }
 
-/* --- Course selection UI --- */
+/* ================== KLAUSUREN (Local) ================== */
+const LS_KLAUS = "klausuren_v1";
+const KlausurenStore = {
+  load() { try { return JSON.parse(localStorage.getItem(LS_KLAUS) || "[]"); } catch { return []; } },
+  save(list){ localStorage.setItem(LS_KLAUS, JSON.stringify(list)); },
+  add(k)    { const l=this.load(); l.push(k); this.save(l); },
+  remove(id){ this.save(this.load().filter(x=>x.id!==id)); },
+  find(date, period){ return this.load().find(k=>k.date===date && k.period===period) || null; }
+};
+const uid = () => Math.random().toString(36).slice(2,10);
+
+/* Sidebar wiring */
+const elSidebar      = document.getElementById('sidebar');
+const btnSidebar     = document.getElementById('btnSidebar');
+const btnSidebarClose= document.getElementById('sidebarClose');
+const navKlausuren   = document.getElementById('navKlausuren');
+const panelKlausuren = document.getElementById('panelKlausuren');
+const formKlausur    = document.getElementById('klausurForm');
+const selSubject     = document.getElementById('klausurSubject');
+const inpName        = document.getElementById('klausurName');
+const inpDate        = document.getElementById('klausurDate');
+const selPeriod      = document.getElementById('klausurPeriod');
+const btnKlausurReset= document.getElementById('klausurReset');
+const listKlausuren  = document.getElementById('klausurList');
+
+function sidebarShow(){ elSidebar.classList.add('show'); }
+function sidebarHide(){ elSidebar.classList.remove('show'); }
+btnSidebar?.addEventListener('click', sidebarShow);
+btnSidebarClose?.addEventListener('click', sidebarHide);
+
+navKlausuren?.addEventListener('click', () => {
+  document.querySelectorAll('.sidebar-link').forEach(b=>b.classList.remove('active'));
+  navKlausuren.classList.add('active');
+  document.querySelectorAll('.sidebar-panel').forEach(p=>p.style.display='none');
+  panelKlausuren.style.display='block';
+  populateKlausurSubjects(window.__latestLessons || []);
+  populateKlausurPeriods(window.__latestLessons || []);
+  renderKlausurList();
+});
+
+btnKlausurReset?.addEventListener('click', () => { formKlausur.reset(); });
+
+formKlausur?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const item = {
+    id: uid(),
+    subject: selSubject.value,
+    name: inpName.value.trim(),
+    date: inpDate.value,                   // YYYY-MM-DD
+    period: parseInt(selPeriod.value, 10)  // 1..N
+  };
+  if (!item.subject || !item.name || !item.date || !item.period) return;
+  // prevent duplicates on same date+period
+  const dup = KlausurenStore.find(item.date, item.period);
+  if (dup) {
+    alert("Für dieses Datum und diese Stunde existiert bereits eine Klausur.");
+    return;
+  }
+  KlausurenStore.add(item);
+  renderKlausurList();
+  // Refresh grid so replacement appears
+  if (window.__latestLessons) buildGrid(window.__latestLessons);
+});
+
+function renderKlausurList() {
+  const data = KlausurenStore.load().sort((a,b)=>{
+    if (a.date!==b.date) return a.date.localeCompare(b.date);
+    return a.period-b.period;
+  });
+  listKlausuren.innerHTML = '';
+  if (!data.length) {
+    listKlausuren.innerHTML = '<div class="muted">Noch keine Klausuren.</div>';
+    return;
+  }
+  data.forEach(k => {
+    const el = document.createElement('div');
+    el.className = 'klausur-item';
+    el.innerHTML = `
+      <div>
+        <strong>${escapeHtml(k.name)}</strong>
+        <small>${escapeHtml(k.subject)} — ${k.date}, ${k.period}. Stunde</small>
+      </div>
+      <button data-id="${k.id}" title="Löschen">Löschen</button>
+    `;
+    el.querySelector('button').addEventListener('click', () => {
+      KlausurenStore.remove(k.id);
+      renderKlausurList();
+      if (window.__latestLessons) buildGrid(window.__latestLessons);
+    });
+    listKlausuren.appendChild(el);
+  });
+}
+
+function populateKlausurSubjects(lessons) {
+  const set = new Set();
+  lessons.forEach(l => { const m = mapSubject(l); if (m) set.add(m); });
+  const items = Array.from(set).sort((a,b)=>a.localeCompare(b,'de'));
+  selSubject.innerHTML = items.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+}
+
+function populateKlausurPeriods(lessons) {
+  let maxP = 0;
+  lessons.forEach(l => { if (Number.isFinite(l.period)) maxP = Math.max(maxP, l.period); });
+  if (!maxP) maxP = 10;
+  selPeriod.innerHTML = Array.from({length:maxP}, (_,i)=>i+1)
+    .map(p => `<option value="${p}">${p}. Stunde</option>`).join('');
+}
+
+/* ================ Timetable rendering ================== */
 function buildCourseSelection(allLessons) {
   const cs       = document.getElementById("course-selection");
   const nameInput= document.getElementById("profile-name");
@@ -135,7 +243,6 @@ function buildCourseSelection(allLessons) {
 
   nameInput.value = getName();
 
-  // Build from mapped subject names
   const subjects = [...new Set(allLessons.map(mapSubject).filter(Boolean))]
     .sort((a,b)=>a.localeCompare(b,"de"));
 
@@ -146,7 +253,7 @@ function buildCourseSelection(allLessons) {
     const label = document.createElement("label");
     label.className = "chk";
     label.innerHTML =
-      `<input type="checkbox" id="${id}" value="${sub}" ${saved.has(sub)?"checked":""}> <span>${sub}</span>`;
+      `<input type="checkbox" id="${id}" value="${escapeHtml(sub)}" ${saved.has(sub)?"checked":""}> <span>${escapeHtml(sub)}</span>`;
     box.appendChild(label);
   });
 
@@ -175,10 +282,12 @@ function buildCourseSelection(allLessons) {
   }
 }
 
-/* --- Grid render --- */
 function buildGrid(lessons) {
   const container = document.getElementById("timetable");
   container.innerHTML = "";
+
+  // snapshot for sidebar dropdowns
+  window.__latestLessons = lessons;
 
   // Mon–Fri only + collect time boundaries
   const tset = new Set();
@@ -198,7 +307,7 @@ function buildGrid(lessons) {
     return;
   }
 
-  // figure out which weekdays actually have lessons
+  // which weekdays actually have lessons
   const daysWithLessons = new Set(valid.map(l => dayIdxISO(l.date)));
 
   const ROW_NORMAL = 72;
@@ -227,7 +336,7 @@ function buildGrid(lessons) {
     grid.appendChild(h);
   }
 
-  // Time rows + slots (skip slots entirely for empty days)
+  // Time rows + slots (skip slots for empty days)
   for (let i = 0; i < times.length - 1; i++) {
     const startM = times[i];
     const endM   = times[i + 1];
@@ -240,8 +349,7 @@ function buildGrid(lessons) {
     grid.appendChild(timeCell);
 
     for (let d = 1; d <= 5; d++) {
-      if (!daysWithLessons.has(d)) continue; // no cells under empty day
-
+      if (!daysWithLessons.has(d)) continue;
       const slot = document.createElement("div");
       slot.className = "slot";
       slot.style.gridColumn = String(d + 1);
@@ -256,15 +364,23 @@ function buildGrid(lessons) {
     return Math.max(0, idx - 1);
   };
 
-  // Place lessons
+  // Place lessons (replace with Klausur if matching)
   valid.forEach(l => {
     const day = dayIdxISO(l.date);
     const s = parseHM(l.start), e = parseHM(l.end);
     const r0 = rowIndexFor(s), r1 = rowIndexFor(e);
     const span = Math.max(1, r1 - r0);
 
+    // Try to infer numeric period index from start row (1-based)
+    let periodNum = l.period;
+    if (!Number.isFinite(periodNum)) {
+      periodNum = r0 + 1; // basic mapping: first slot of the day = 1. Stunde
+    }
+
+    const klausur = KlausurenStore.find(l.date, periodNum);
+
     const card = document.createElement("div");
-    card.className = `lesson ${l.status || ""}`.trim();
+    card.className = `lesson ${klausur ? "klausur" : (l.status || "")}`.trim();
     card.style.gridColumn = String(day + 1);
     card.style.gridRow = `${r0 + 2} / span ${span}`;
 
@@ -276,25 +392,37 @@ function buildGrid(lessons) {
     const subj = mapSubject(l);
     const room = mapRoom(l);
 
-    card.innerHTML = `
-      <div class="lesson-title">${subj}</div>
-      <div class="lesson-meta">
-        ${l.teacher ? `<span>· ${l.teacher}</span>` : ""}
-        ${room ? `<span>· ${room}</span>` : ""}
-      </div>
-      ${badge ? `<div class="badge">${badge}</div>` : ""}
-      ${l.note ? `<div class="note">${l.note}</div>` : ""}
-    `;
+    if (klausur) {
+      card.innerHTML = `
+        <div class="lesson-title">Klausur</div>
+        <div class="lesson-meta">
+          <span>${escapeHtml(klausur.name)}</span>
+          ${klausur.subject ? `<span>· ${escapeHtml(klausur.subject)}</span>` : ""}
+          <span>· ${periodNum}. Std</span>
+        </div>
+      `;
+    } else {
+      card.innerHTML = `
+        <div class="lesson-title">${escapeHtml(subj)}</div>
+        <div class="lesson-meta">
+          ${l.teacher ? `<span>· ${escapeHtml(l.teacher)}</span>` : ""}
+          ${room ? `<span>· ${escapeHtml(room)}</span>` : ""}
+        </div>
+        ${badge ? `<div class="badge">${badge}</div>` : ""}
+        ${l.note ? `<div class="note">${escapeHtml(l.note)}</div>` : ""}
+      `;
+    }
+
     grid.appendChild(card);
   });
 
-  // Clean placeholder for empty weekdays (no grid underneath)
+  // Placeholder for empty weekdays (full column)
   for (let d = 1; d <= 5; d++) {
     if (daysWithLessons.has(d)) continue;
     const placeholder = document.createElement("div");
     placeholder.className = "placeholder-day";
     placeholder.style.gridColumn = String(d + 1);
-    placeholder.style.gridRow = `2 / -1`; // full column
+    placeholder.style.gridRow = `2 / -1`;
     placeholder.innerHTML = `
       <div class="ph-card" role="status" aria-label="Daten folgen">
         <div class="ph-ico">⏳</div>
@@ -313,7 +441,7 @@ async function loadTimetable(force = false) {
   try {
     await loadMappings();
 
-    const res = await fetch(`/api/timetable?ts=${Date.now()}`, { cache: "no-store" });
+    const res = await fetch(`/api/timetable?ts=${Date.now()}${force ? "&force=1":""}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`/api/timetable ${res.status}`);
     const data = await res.json();
     let lessons = Array.isArray(data.lessons) ? data.lessons : [];
@@ -336,6 +464,11 @@ async function loadTimetable(force = false) {
     });
 
     buildGrid(lessons);
+    // keep sidebar dropdowns fresh while open
+    if (elSidebar?.classList.contains('show')) {
+      populateKlausurSubjects(lessons);
+      populateKlausurPeriods(lessons);
+    }
   } catch (err) {
     const container = document.getElementById("timetable");
     if (container) {
@@ -354,15 +487,9 @@ if ("serviceWorker" in navigator) {
   (async () => {
     try {
       const reg = await navigator.serviceWorker.register("/sw.js");
-
-      // check now and every hour
       reg.update();
       setInterval(() => reg.update(), 60 * 60 * 1000);
-
-      // if a SW is already waiting → activate it
       if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
-
-      // when a new SW is found, tell it to skip waiting
       reg.addEventListener("updatefound", () => {
         const sw = reg.installing;
         if (!sw) return;
@@ -372,8 +499,6 @@ if ("serviceWorker" in navigator) {
           }
         });
       });
-
-      // when controller changes → reload once to pick up fresh code
       let hasReloaded = false;
       navigator.serviceWorker.addEventListener("controllerchange", () => {
         if (hasReloaded) return;
@@ -386,6 +511,7 @@ if ("serviceWorker" in navigator) {
   })();
 }
 
+/* --- boot --- */
 document.addEventListener("DOMContentLoaded", () => {
   const refreshBtn = document.getElementById("refresh-btn");
   if (refreshBtn) {
@@ -398,6 +524,12 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
   }
+  // close sidebar when tapping outside (optional)
+  document.addEventListener('click', (e)=>{
+    if (!elSidebar.classList.contains('show')) return;
+    const within = elSidebar.contains(e.target) || (btnSidebar && btnSidebar.contains(e.target));
+    if (!within) sidebarHide();
+  });
 
   loadTimetable(); // autostart
   setInterval(()=>loadTimetable(true), 5*60*1000);
