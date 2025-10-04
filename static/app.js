@@ -96,18 +96,20 @@ async function loadMappings() {
   MAPS_READY = true;
 }
 
-// Build a complete subject list: lessons + mapping values
+// Build a complete subject list: lessons + mapping values + mapping keys
 function allKnownSubjects(lessons) {
-  // subjects from lessons (already mapped via mapSubject)
   const fromLessons = new Set(
     lessons.map(l => mapSubject(l) || l.subject || l.subject_original).filter(Boolean)
   );
-  // subjects from mapping values (display names)
-  const fromMappings = new Set(
+  const fromMappingsValues = new Set(
     Object.values(COURSE_MAP).filter(v => v !== null && v !== undefined && String(v).trim() !== "")
   );
-  // union + sort (German collation)
-  return [...new Set([...fromLessons, ...fromMappings])].sort((a,b)=>a.localeCompare(b,'de'));
+  const fromMappingsKeys = new Set(
+    Object.keys(COURSE_MAP).filter(k => k && String(k).trim() !== "")
+  );
+
+  return [...new Set([...fromLessons, ...fromMappingsValues, ...fromMappingsKeys])]
+    .sort((a,b)=>a.localeCompare(b,'de'));
 }
 
 /* Backward-compatible lookup: try strong norm, then your previous _norm, then raw */
