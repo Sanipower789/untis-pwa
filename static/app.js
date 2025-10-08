@@ -1,4 +1,4 @@
-/* ===== fatal overlay ===== */
+﻿/* ===== fatal overlay ===== */
 (function () {
   const show = (title, detail) => {
     const preOld = document.getElementById("fatal-overlay");
@@ -66,6 +66,28 @@ const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g, " ").toLowerCase();
 
+const PERIOD_SCHEDULE = {
+  1: { start: "07:55", end: "08:55" },
+  2: { start: "09:10", end: "10:10" },
+  3: { start: "10:20", end: "11:20" },
+  4: { start: "11:45", end: "12:45" },
+  5: { start: "12:55", end: "13:55" },
+  6: { start: "13:55", end: "14:25" },
+  7: { start: "14:25", end: "15:25" },
+  8: { start: "15:35", end: "16:35" }
+};
+const PERIOD_NUMBERS = Object.keys(PERIOD_SCHEDULE).map(n => Number(n)).sort((a,b)=>a-b);
+const periodStartMinutes = (p) => { const info = PERIOD_SCHEDULE[p]; return info ? parseHM(info.start) : null; };
+const periodEndMinutes   = (p) => { const info = PERIOD_SCHEDULE[p]; return info ? parseHM(info.end) : null; };
+const formatPeriodRange = (start, end) => {
+  if (!Number.isFinite(start) || !PERIOD_SCHEDULE[start]) return "";
+  const s = PERIOD_SCHEDULE[start];
+  end = Number.isFinite(end) && PERIOD_SCHEDULE[end] ? end : start;
+  const e = PERIOD_SCHEDULE[end];
+  const label = start === end ? `${start}. Stunde` : `${start}. - ${end}. Stunde`;
+  return `${label} (${s.start} - ${e.end} Uhr)`;
+};
+
 /* Strong canonical normaliser (umlauts, (), dashes, tags, spaces) */
 const normKey = (s) => {
   if (!s) return "";
@@ -129,12 +151,52 @@ function mapSubject(lesson) {
 
 /* ================== KLAUSUREN (Local) ================== */
 const LS_KLAUS = "klausuren_v1";
+function normaliseKlausur(item) {
+  if (!item || typeof item !== "object") return null;
+  const clone = { ...item };
+  const startRaw = Number.parseInt(clone.periodStart ?? clone.period, 10);
+  const endRaw   = Number.parseInt(clone.periodEnd ?? clone.period, 10);
+  let periodStart = Number.isFinite(startRaw) ? startRaw : 1;
+  let periodEnd   = Number.isFinite(endRaw) ? endRaw : periodStart;
+  if (periodEnd < periodStart) periodEnd = periodStart;
+  delete clone.period; // legacy
+  clone.periodStart = periodStart;
+  clone.periodEnd = periodEnd;
+  clone.name = (clone.name || "").trim();
+  clone.subject = (clone.subject || "").trim();
+  clone.id = clone.id || uid();
+  return clone;
+}
+
 const KlausurenStore = {
-  load() { try { return JSON.parse(localStorage.getItem(LS_KLAUS) || "[]"); } catch { return []; } },
-  save(list){ localStorage.setItem(LS_KLAUS, JSON.stringify(list)); },
-  add(k)    { const l=this.load(); l.push(k); this.save(l); },
+  load() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LS_KLAUS) || "[]");
+      if (!Array.isArray(raw)) return [];
+      return raw.map(normaliseKlausur).filter(Boolean);
+    } catch {
+      return [];
+    }
+  },
+  save(list){
+    const serialisable = Array.isArray(list) ? list.map(normaliseKlausur).filter(Boolean) : [];
+    localStorage.setItem(LS_KLAUS, JSON.stringify(serialisable));
+  },
+  add(k)    {
+    const norm = normaliseKlausur(k);
+    if (!norm) return;
+    const arr = this.load();
+    arr.push(norm);
+    this.save(arr);
+  },
   remove(id){ this.save(this.load().filter(x=>x.id!==id)); },
-  find(date, period){ return this.load().find(k=>k.date===date && k.period===period) || null; }
+  find(date, period){
+    if (!period) return null;
+    return this.load().find(k=>k.date===date && period >= k.periodStart && period <= k.periodEnd) || null;
+  },
+  overlaps(date, start, end){
+    return this.load().find(k => k.date === date && !(end < k.periodStart || start > k.periodEnd)) || null;
+  }
 };
 const uid = () => Math.random().toString(36).slice(2,10);
 
@@ -252,7 +314,8 @@ const formKlausur    = document.getElementById('klausurForm');
 const selSubject     = document.getElementById('klausurSubject');
 const inpName        = document.getElementById('klausurName');
 const inpDate        = document.getElementById('klausurDate');
-const selPeriod      = document.getElementById('klausurPeriod');
+const selPeriodStart = document.getElementById('klausurPeriodStart');
+const selPeriodEnd   = document.getElementById('klausurPeriodEnd');
 const btnKlausurReset= document.getElementById('klausurReset');
 const listKlausuren  = document.getElementById('klausurList');
 
@@ -267,25 +330,49 @@ navKlausuren?.addEventListener('click', () => {
   document.querySelectorAll('.sidebar-panel').forEach(p=>p.style.display='none');
   panelKlausuren.style.display='block';
   populateKlausurSubjects(window.__latestLessons || []);
-  populateKlausurPeriods(window.__latestLessons || []);
+  populateKlausurPeriods();
   renderKlausurList();
 });
 
-btnKlausurReset?.addEventListener('click', () => { formKlausur.reset(); });
+btnKlausurReset?.addEventListener('click', () => {
+  formKlausur.reset();
+  populateKlausurPeriods();
+});
+selPeriodStart?.addEventListener('change', updatePeriodEndOptions);
+selPeriodEnd?.addEventListener('change', () => {
+  if (!selPeriodStart || !selPeriodEnd) return;
+  const startVal = Number.parseInt(selPeriodStart.value, 10);
+  const endVal = Number.parseInt(selPeriodEnd.value, 10);
+  if (Number.isFinite(startVal) && Number.isFinite(endVal) && endVal < startVal) {
+    selPeriodEnd.value = String(startVal);
+  }
+});
 
 formKlausur?.addEventListener('submit', (e) => {
   e.preventDefault();
-  const item = {
+  const subject = selSubject.value;
+  const name = inpName.value.trim();
+  const date = inpDate.value;                   // YYYY-MM-DD
+  const start = Number.parseInt(selPeriodStart?.value ?? "", 10);
+  const end = Number.parseInt(selPeriodEnd?.value ?? "", 10);
+
+  if (!subject || !name || !date || !Number.isFinite(start) || !Number.isFinite(end)) return;
+  if (end < start) { alert('Bitte gib eine gueltige Stunden-Spanne an.'); return; }
+
+  const overlap = KlausurenStore.overlaps(date, start, end);
+  if (overlap) {
+    alert('Fuer dieses Datum existiert bereits eine Klausur in diesem Zeitraum.');
+    return;
+  }
+
+  KlausurenStore.add({
     id: uid(),
-    subject: selSubject.value,
-    name: inpName.value.trim(),
-    date: inpDate.value,                   // YYYY-MM-DD
-    period: parseInt(selPeriod.value, 10)  // 1..N
-  };
-  if (!item.subject || !item.name || !item.date || !item.period) return;
-  const dup = KlausurenStore.find(item.date, item.period);
-  if (dup) { alert("Für dieses Datum und diese Stunde existiert bereits eine Klausur."); return; }
-  KlausurenStore.add(item);
+    subject,
+    name,
+    date,
+    periodStart: start,
+    periodEnd: end
+  });
   renderKlausurList();
   if (window.__latestLessons) buildGrid(window.__latestLessons);
 });
@@ -293,7 +380,7 @@ formKlausur?.addEventListener('submit', (e) => {
 function renderKlausurList() {
   const data = KlausurenStore.load().sort((a,b)=>{
     if (a.date!==b.date) return a.date.localeCompare(b.date);
-    return a.period-b.period;
+    return (a.periodStart||0)-(b.periodStart||0);
   });
   listKlausuren.innerHTML = '';
   if (!data.length) {
@@ -306,7 +393,7 @@ function renderKlausurList() {
     el.innerHTML = `
       <div>
         <strong>${escapeHtml(k.name)}</strong>
-        <small>${escapeHtml(k.subject)} — ${k.date}, ${k.period}. Stunde</small>
+        <small>${escapeHtml(k.subject)} - ${k.date}, ${escapeHtml(formatPeriodRange(k.periodStart, k.periodEnd))}</small>
       </div>
       <button data-id="${k.id}" title="Löschen">Löschen</button>
     `;
@@ -327,12 +414,33 @@ function populateKlausurSubjects(lessons) {
   selSubject.innerHTML = items.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
 }
 
-function populateKlausurPeriods(lessons) {
-  let maxP = 0;
-  lessons.forEach(l => { if (Number.isFinite(l.period)) maxP = Math.max(maxP, l.period); });
-  if (!maxP || maxP > 8) maxP = 8; // cap at 8
-  selPeriod.innerHTML = Array.from({length:maxP}, (_,i)=>i+1)
-    .map(p => `<option value="${p}">${p}. Stunde</option>`).join('');
+function populateKlausurPeriods() {
+  if (!selPeriodStart || !selPeriodEnd) return;
+  const optionsHtml = PERIOD_NUMBERS
+    .map(num => {
+      const info = PERIOD_SCHEDULE[num];
+      return `<option value="${num}">${num}. Stunde (${info.start} - ${info.end} Uhr)</option>`;
+    })
+    .join('');
+  selPeriodStart.innerHTML = optionsHtml;
+  selPeriodEnd.innerHTML = optionsHtml;
+
+  const defaultStart = selPeriodStart.value || String(PERIOD_NUMBERS[0] || 1);
+  selPeriodStart.value = defaultStart;
+  updatePeriodEndOptions();
+}
+
+function updatePeriodEndOptions() {
+  if (!selPeriodStart || !selPeriodEnd) return;
+  const startVal = Number.parseInt(selPeriodStart.value, 10);
+  [...selPeriodEnd.options].forEach(opt => {
+    const val = Number.parseInt(opt.value, 10);
+    opt.disabled = Number.isFinite(startVal) && Number.isFinite(val) && val < startVal;
+  });
+  const endVal = Number.parseInt(selPeriodEnd.value, 10);
+  if (Number.isFinite(startVal) && (!Number.isFinite(endVal) || endVal < startVal)) {
+    selPeriodEnd.value = String(startVal);
+  }
 }
 
 /* ================ Timetable rendering ================== */
@@ -399,6 +507,7 @@ function buildGrid(lessons) {
   // Mon–Fri only + collect time boundaries
   const tset = new Set();
   const valid = [];
+  const klausurenList = KlausurenStore.load();
   for (const l of lessons) {
     const d = dayIdxISO(l.date);
     if (d >= 1 && d <= 5) {
@@ -407,6 +516,12 @@ function buildGrid(lessons) {
       tset.add(parseHM(l.end));
     }
   }
+  PERIOD_NUMBERS.forEach(num => {
+    const info = PERIOD_SCHEDULE[num];
+    if (!info) return;
+    tset.add(parseHM(info.start));
+    tset.add(parseHM(info.end));
+  });
 
   const times = [...tset].sort((a, b) => a - b);
   if (times.length < 2) {
@@ -473,45 +588,64 @@ function buildGrid(lessons) {
   // Place lessons (replace with Klausur if matching)
   valid.forEach(l => {
     const day = dayIdxISO(l.date);
-    const s = parseHM(l.start), e = parseHM(l.end);
-    const r0 = rowIndexFor(s), r1 = rowIndexFor(e);
-    const span = Math.max(1, r1 - r0);
+    let s = parseHM(l.start);
+    let e = parseHM(l.end);
+    let r0 = rowIndexFor(s), r1 = rowIndexFor(e);
+    let span = Math.max(1, r1 - r0);
 
     let periodNum = l.period;
     if (!Number.isFinite(periodNum)) {
       periodNum = r0 + 1; // first slot of the day = 1. Stunde
     }
 
-    const klausur = KlausurenStore.find(l.date, periodNum);
+    const klausur = klausurenList.find(k => {
+      if (k.date !== l.date) return false;
+      const startPeriod = k.periodStart || periodNum;
+      const endPeriod = k.periodEnd || startPeriod;
+      return Number.isFinite(periodNum) && periodNum >= startPeriod && periodNum <= endPeriod;
+    });
+
+    if (klausur && Number.isFinite(periodNum) && periodNum > (klausur.periodStart || periodNum)) {
+      return;
+    }
 
     const card = document.createElement("div");
     card.className = `lesson ${klausur ? "klausur" : (l.status || "")}`.trim();
     card.style.gridColumn = String(day + 1);
-    card.style.gridRow = `${r0 + 2} / span ${span}`;
 
     const badge =
-      l.status === "entfaellt" ? "🟥 Entfällt" :
-      l.status === "vertretung" ? "⚠️ Vertretung" :
-      l.status === "aenderung" ? "🟦 Änderung" : "";
+      l.status === "entfaellt" ? "?? Entf�llt" :
+      l.status === "vertretung" ? "?? Vertretung" :
+      l.status === "aenderung" ? "?? �nderung" : "";
 
     const subj = mapSubject(l);
     const room = mapRoom(l);
 
     if (klausur) {
+      const startPeriod = klausur.periodStart || periodNum;
+      const endPeriod = klausur.periodEnd || startPeriod;
+      const startMin = periodStartMinutes(startPeriod) ?? s;
+      const endMin = periodEndMinutes(endPeriod) ?? e;
+      const rowStart = rowIndexFor(startMin);
+      const rowEnd = rowIndexFor(endMin);
+      const spanK = Math.max(1, rowEnd - rowStart);
+      card.style.gridRow = `${rowStart + 2} / span ${spanK}`;
+      const rangeLabel = formatPeriodRange(startPeriod, endPeriod);
       card.innerHTML = `
         <div class="lesson-title">Klausur</div>
         <div class="lesson-meta">
           <span>${escapeHtml(klausur.name)}</span>
-          ${klausur.subject ? `<span>· ${escapeHtml(klausur.subject)}</span>` : ""}
-          <span>· ${periodNum}. Std</span>
+          ${klausur.subject ? `<span>&bull; ${escapeHtml(klausur.subject)}</span>` : ""}
+          <span>&bull; ${escapeHtml(rangeLabel)}</span>
         </div>
       `;
     } else {
+      card.style.gridRow = `${r0 + 2} / span ${span}`;
       card.innerHTML = `
         <div class="lesson-title">${escapeHtml(subj)}</div>
         <div class="lesson-meta">
-          ${l.teacher ? `<span>· ${escapeHtml(l.teacher)}</span>` : ""}
-          ${room ? `<span>· ${escapeHtml(room)}</span>` : ""}
+          ${l.teacher ? `<span>� ${escapeHtml(l.teacher)}</span>` : ""}
+          ${room ? `<span>� ${escapeHtml(room)}</span>` : ""}
         </div>
         ${badge ? `<div class="badge">${badge}</div>` : ""}
         ${l.note ? `<div class="note">${escapeHtml(l.note)}</div>` : ""}
@@ -520,7 +654,6 @@ function buildGrid(lessons) {
 
     grid.appendChild(card);
   });
-
   // Placeholder for empty weekdays (full column)
   for (let d = 1; d <= 5; d++) {
     if (daysWithLessons.has(d)) continue;
@@ -580,7 +713,7 @@ async function loadTimetable(force = false) {
     buildGrid(lessons);
     if (elSidebar?.classList.contains('show')) {
       populateKlausurSubjects(lessons);
-      populateKlausurPeriods(lessons);
+      populateKlausurPeriods();
     }
   } catch (err) {
     const container = document.getElementById("timetable");
@@ -648,3 +781,5 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(()=>loadTimetable(true), 5*60*1000);
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });
+
+
