@@ -51,7 +51,10 @@ const isStandalone = () =>
 const LS_COURSES = "myCourses";
 const LS_NAME    = "myName";
 const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
-const setCourses = (arr) => localStorage.setItem(LS_COURSES, JSON.stringify(arr || []));
+const setCourses = (arr) => {
+  const unique = Array.isArray(arr) ? Array.from(new Set(arr.filter(v => typeof v === "string" && v.trim()))) : [];
+  localStorage.setItem(LS_COURSES, JSON.stringify(unique));
+};
 const getName    = () => localStorage.getItem(LS_NAME) || "";
 const setName    = (v) => localStorage.setItem(LS_NAME, v || "");
 
@@ -63,7 +66,7 @@ const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g, " ").toLowerCase();
 
-/* Strong canonical normaliser (umlauts, (), dashes, tags, numbers, spaces) */
+/* Strong canonical normaliser (umlauts, (), dashes, tags, spaces) */
 const normKey = (s) => {
   if (!s) return "";
   s = String(s)
@@ -135,14 +138,30 @@ const KlausurenStore = {
 };
 const uid = () => Math.random().toString(36).slice(2,10);
 
-/* ============ COURSE SELECTION from course_mapping.txt ONLY ============ */
-let COURSE_LABELS = null; // array of RHS labels (display names)
+/* ============ COURSE OPTIONS from course_mapping.txt ONLY ============ */
+let COURSE_OPTIONS = [];
+let COURSE_LABEL_BY_KEY = new Map();
+let COURSE_KEY_BY_LABEL = new Map(); // keyed by _norm(label)
 
-/** Fetch RHS labels from the raw mapping text file. */
-async function loadCourseLabelsFromTxt() {
-  if (Array.isArray(COURSE_LABELS) && COURSE_LABELS.length) return COURSE_LABELS;
+function registerCourseOptions(list) {
+  COURSE_OPTIONS = Array.isArray(list) ? list.slice() : [];
+  COURSE_LABEL_BY_KEY = new Map();
+  COURSE_KEY_BY_LABEL = new Map();
+  COURSE_OPTIONS.forEach(opt => {
+    const key = (opt?.key ?? "").trim();
+    const label = (opt?.label ?? "").trim() || key;
+    if (!key) return;
+    COURSE_LABEL_BY_KEY.set(key, label);
+    const normLabel = _norm(label);
+    if (normLabel && !COURSE_KEY_BY_LABEL.has(normLabel)) {
+      COURSE_KEY_BY_LABEL.set(normLabel, key);
+    }
+  });
+}
+
+async function loadCourseOptionsFromTxt() {
   const tryUrls = ["/static/course_mapping.txt", "/course_mapping.txt"];
-  const labels = [];
+  const byKey = new Map();
   for (const url of tryUrls) {
     try {
       const res = await fetch(`${url}?v=${Date.now()}`, { cache: "no-store" });
@@ -154,44 +173,73 @@ async function loadCourseLabelsFromTxt() {
         const i = s.indexOf("=");
         if (i === -1) return;
         const lhs = s.slice(0, i).trim();
-        const rhs = s.slice(i + 1).trim(); // display name
-        // If RHS empty, fall back to LHS so courses without labels still appear
-        const val = rhs.length > 0 ? rhs : lhs;
-        if (val) labels.push(val);
+        const rhs = s.slice(i + 1).trim();
+        if (!lhs) return;
+        const key = normKey(lhs);
+        if (!key) return;
+        const label = rhs || lhs;
+        byKey.set(key, label);
       });
-      break; // stop after first successful read
+      break;
     } catch (_) { /* try next */ }
   }
-  // case-insensitive dedupe + sort
-  const seen = new Set();
-  COURSE_LABELS = labels.filter(v=>{
-    const k = v.toLocaleLowerCase('de');
-    if (seen.has(k)) return false;
-    seen.add(k); return true;
-  }).sort((a,b)=>a.localeCompare(b,'de'));
-  return COURSE_LABELS;
+  return Array.from(byKey.entries())
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'de'));
 }
 
-/** Build the subjects list for the selection pane. */
-async function subjectsForSelection(allLessons) {
-  // 0) Try server-provided complete list
+async function loadCourseOptions() {
+  if (COURSE_OPTIONS.length) return COURSE_OPTIONS;
   try {
-    const r = await fetch(`/api/courses?v=${Date.now()}`, { cache: 'no-store' });
-    if (r.ok) {
-      const j = await r.json();
+    const res = await fetch(`/api/courses?v=${Date.now()}`, { cache: 'no-store' });
+    if (res.ok) {
+      const j = await res.json();
       if (j && Array.isArray(j.courses) && j.courses.length) {
-        return j.courses.slice().sort((a,b)=>a.localeCompare(b,'de'));
+        const opts = j.courses
+          .map(c => ({ key: String(c.key || "").trim(), label: String(c.label || "").trim() || String(c.key || "") }))
+          .filter(opt => opt.key);
+        if (opts.length) {
+          opts.sort((a,b)=>a.label.localeCompare(b.label,'de'));
+          registerCourseOptions(opts);
+          return COURSE_OPTIONS;
+        }
       }
     }
-  } catch (_) { /* fall back below */ }
+  } catch (_) { /* ignore, fallback below */ }
 
-  // 1) Fallback: only labels parsed from course_mapping.txt
-  try {
-    const labels = await loadCourseLabelsFromTxt();
-    return labels;
-  } catch (_) {
-    return [];
-  }
+  const fallback = await loadCourseOptionsFromTxt();
+  registerCourseOptions(fallback);
+  return COURSE_OPTIONS;
+}
+
+function resolveCourseKey(value) {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (COURSE_LABEL_BY_KEY.has(trimmed)) return trimmed;
+  const normLabel = _norm(trimmed);
+  if (normLabel && COURSE_KEY_BY_LABEL.has(normLabel)) return COURSE_KEY_BY_LABEL.get(normLabel);
+  const nk = normKey(trimmed);
+  if (nk && COURSE_LABEL_BY_KEY.has(nk)) return nk;
+  return null;
+}
+
+function normaliseCourseSelection(values) {
+  const out = [];
+  const seen = new Set();
+  let changed = false;
+  values.forEach(v => {
+    const key = resolveCourseKey(typeof v === "string" ? v : "");
+    if (!key) { changed = true; return; }
+    if (seen.has(key)) {
+      if (key === v) changed = true;
+      return;
+    }
+    seen.add(key);
+    out.push(key);
+    if (key !== v) changed = true;
+  });
+  return { keys: out, changed };
 }
 
 /* ===== Sidebar (Klausuren) ===== */
@@ -288,7 +336,7 @@ function populateKlausurPeriods(lessons) {
 }
 
 /* ================ Timetable rendering ================== */
-function buildCourseSelection(allLessons) {
+async function buildCourseSelection(allLessons) {
   const cs       = document.getElementById("course-selection");
   const nameInput= document.getElementById("profile-name");
   const box      = document.getElementById("courses");
@@ -298,23 +346,28 @@ function buildCourseSelection(allLessons) {
 
   nameInput.value = getName();
 
-  // subjects from course_mapping.txt (fallback to lessons if TXT missing)
-  subjectsForSelection(allLessons).then(subjects => {
-    const saved = new Set(getCourses());
-    box.innerHTML = "";
-    subjects.forEach(sub => {
-      const id = "sub_" + sub.replace(/\W+/g,"_");
-      const label = document.createElement("label");
-      label.className = "chk";
-      label.innerHTML =
-        `<input type="checkbox" id="${id}" value="${escapeHtml(sub)}" ${saved.has(sub)?"checked":""}> <span>${escapeHtml(sub)}</span>`;
-      box.appendChild(label);
-    });
+  const options = await loadCourseOptions();
+  const rawSaved = getCourses();
+  const { keys: resolved, changed } = normaliseCourseSelection(Array.isArray(rawSaved) ? rawSaved : []);
+  if (changed) setCourses(resolved);
+  const saved = new Set(resolved);
+
+  box.innerHTML = "";
+  options.forEach(opt => {
+    const key = opt.key;
+    const labelText = opt.label || opt.key;
+    const id = "sub_" + key.replace(/[^a-z0-9]+/gi, "_");
+    const label = document.createElement("label");
+    label.className = "chk";
+    label.innerHTML =
+      `<input type="checkbox" id="${id}" value="${escapeHtml(key)}" ${saved.has(key)?"checked":""}> <span>${escapeHtml(labelText)}</span>`;
+    box.appendChild(label);
   });
 
   saveBtn.onclick = () => {
     const selected = [...box.querySelectorAll("input:checked")]
-      .map(i => i.value);
+      .map(i => i.value)
+      .filter(Boolean);
     setCourses(selected);
     setName(nameInput.value.trim());
     cs.style.display = "none";
@@ -492,6 +545,7 @@ function buildGrid(lessons) {
 async function loadTimetable(force = false) {
   try {
     await loadMappings();
+    await loadCourseOptions();
 
     const res = await fetch(`/api/timetable?ts=${Date.now()}${force ? "&force=1":""}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`/api/timetable ${res.status}`);
@@ -504,20 +558,16 @@ async function loadTimetable(force = false) {
       cs.dataset.init = "1";
     }
 
-    const selectedRaw = new Set(getCourses());
-    if (selectedRaw.size > 0) {
-      const selectedNorm = new Set(Array.from(selectedRaw, s => _norm(s)));
+    const storedValues = Array.isArray(getCourses()) ? getCourses() : [];
+    const { keys: selectedKeys, changed } = normaliseCourseSelection(storedValues);
+    if (changed) setCourses(selectedKeys);
+    const selectedSet = new Set(selectedKeys);
+
+    if (selectedSet.size > 0) {
       lessons = lessons.filter((l) => {
-        const subjMapped = mapSubject(l) || "";
-        const subjOrig   = (l.subject_original ?? "").trim();
-        const subjLive   = (l.subject ?? "").trim();
-
-        // Direct raw equality match
-        if (selectedRaw.has(subjMapped) || selectedRaw.has(subjOrig) || selectedRaw.has(subjLive)) return true;
-
-        // Normalised match to be resilient to small differences
-        const cand = [subjMapped, subjOrig, subjLive].map(_norm);
-        return cand.some(k => selectedNorm.has(k));
+        const keyOrig = normKey(l.subject_original ?? "");
+        const keyLive = normKey(l.subject ?? "");
+        return selectedSet.has(keyOrig) || selectedSet.has(keyLive);
       });
     }
 

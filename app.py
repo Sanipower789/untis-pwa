@@ -52,7 +52,7 @@ ADMIN_TOKEN    = os.environ.get("ADMIN_TOKEN")
 _UML = str.maketrans({"ä":"a","ö":"o","ü":"u","Ä":"a","Ö":"o","Ü":"u"})
 
 def norm_key(s: str) -> str:
-    """Canonical key for subjects/rooms: lower, umlaut fold, strip () content, dashes, tags, loose numbers, collapse spaces."""
+    """Canonical key for subjects/rooms: lower, umlaut fold, strip () content, dashes, tags, collapse spaces."""
     if not s:
         return ""
     s = s.strip().translate(_UML).lower()
@@ -188,24 +188,27 @@ def api_mappings():
 
 @app.route("/api/courses")
 def api_courses():
-    """Return course list strictly from course_mapping.txt.
-    For each "left = right" line: use `right` if non-empty, else `left`.
-    Case-insensitive dedupe and sort.
+    """Return course options (key + display label) from course_mapping.txt.
+
+    Key: normalised LHS via norm_key. Label: RHS if present, else original LHS.
     """
     raw_map = load_mapping_txt(COURSE_MAP_PATH)  # { raw_left: rhs }
-    seen_ci = set()
-    out = []
+    options: dict[str, str] = {}
     for left, right in raw_map.items():
-        label = (right or "").strip() or (left or "").strip()
-        if not label:
+        left = (left or "").strip()
+        label = (right or "").strip() or left
+        if not left or not label:
             continue
-        k = label.lower()
-        if k in seen_ci:
+        nk = norm_key(left)
+        if not nk:
             continue
-        seen_ci.add(k)
-        out.append(label)
-    out.sort(key=lambda s: (s.lower(), s))
-    return _no_store(jsonify({"ok": True, "courses": out}))
+        options[nk] = label
+
+    items = [
+        {"key": key, "label": options[key]}
+        for key in sorted(options.keys(), key=lambda k: (options[k].lower(), options[k]))
+    ]
+    return _no_store(jsonify({"ok": True, "courses": items}))
 
 @app.route("/api/health")
 def api_health():
