@@ -105,12 +105,6 @@ function lookup(map, raw) {
 }
 
 /* Mapping helpers for rendering */
-function mapSubject(lesson) {
-  const orig = lesson.subject_original ?? lesson.subject ?? "";
-  const val = lookup(COURSE_MAP, orig);
-  if (val !== undefined && val !== null && val !== "") return val;
-  return lesson.subject ?? "—";
-}
 function mapRoom(lesson) {
   const live = lesson.room ?? "";
   const val = lookup(ROOM_MAP, live);
@@ -118,13 +112,16 @@ function mapRoom(lesson) {
   return live;
 }
 
-// Override: ensure unmapped subjects fall back to the raw subject for stable filtering
+// Subject display with mapping; fall back to original/live names when mapping empty/missing
 function mapSubject(lesson) {
   const orig = lesson.subject_original ?? lesson.subject ?? "";
+  const live = lesson.subject ?? "";
   const val = lookup(COURSE_MAP, orig);
-  if (val !== undefined && val !== null && val !== "") return val;
-  if (val === "") return orig || lesson.subject || "";
-  return orig || lesson.subject || "";
+  if (val !== undefined && val !== null) {
+    if (val !== "") return val;
+    return orig || live || "";
+  }
+  return live || orig || "";
 }
 
 /* ================== KLAUSUREN (Local) ================== */
@@ -317,8 +314,7 @@ function buildCourseSelection(allLessons) {
 
   saveBtn.onclick = () => {
     const selected = [...box.querySelectorAll("input:checked")]
-      .map(i => i.value)
-      .slice(0,12);
+      .map(i => i.value);
     setCourses(selected);
     setName(nameInput.value.trim());
     cs.style.display = "none";
