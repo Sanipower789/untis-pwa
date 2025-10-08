@@ -509,9 +509,21 @@ async function loadTimetable(force = false) {
       cs.dataset.init = "1";
     }
 
-    const selected = new Set(getCourses());
-    if (selected.size > 0) {
-      lessons = lessons.filter((l) => selected.has(mapSubject(l)));
+    const selectedRaw = new Set(getCourses());
+    if (selectedRaw.size > 0) {
+      const selectedNorm = new Set(Array.from(selectedRaw, s => _norm(s)));
+      lessons = lessons.filter((l) => {
+        const subjMapped = mapSubject(l) || "";
+        const subjOrig   = (l.subject_original ?? "").trim();
+        const subjLive   = (l.subject ?? "").trim();
+
+        // Direct raw equality match
+        if (selectedRaw.has(subjMapped) || selectedRaw.has(subjOrig) || selectedRaw.has(subjLive)) return true;
+
+        // Normalised match to be resilient to small differences
+        const cand = [subjMapped, subjOrig, subjLive].map(_norm);
+        return cand.some(k => selectedNorm.has(k));
+      });
     }
 
     lessons.sort((a, b) => {
