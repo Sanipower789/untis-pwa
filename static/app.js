@@ -148,8 +148,11 @@ async function loadCourseLabelsFromTxt() {
         if (!s || s.startsWith("#")) return;
         const i = s.indexOf("=");
         if (i === -1) return;
+        const lhs = s.slice(0, i).trim();
         const rhs = s.slice(i + 1).trim(); // display name
-        if (rhs.length > 0) labels.push(rhs);
+        // If RHS empty, fall back to LHS so courses without labels still appear
+        const val = rhs.length > 0 ? rhs : lhs;
+        if (val) labels.push(val);
       });
       break; // stop after first successful read
     } catch (_) { /* try next */ }
@@ -166,29 +169,34 @@ async function loadCourseLabelsFromTxt() {
 
 /** Build the subjects list for the selection pane. */
 async function subjectsForSelection(allLessons) {
-  // Merge labels from course_mapping.txt with subjects seen in lessons.
-  // This ensures we don't hide courses just because the TXT is incomplete.
+  // 0) Try server-provided complete list
+  try {
+    const r = await fetch(`/api/courses?v=${Date.now()}`, { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && Array.isArray(j.courses) && j.courses.length) {
+        return j.courses.slice().sort((a,b)=>a.localeCompare(b,'de'));
+      }
+    }
+  } catch (_) { /* fall back below */ }
+
+  // 1) Merge labels from course_mapping.txt with subjects seen in lessons.
+  //    This ensures we don't hide courses just because the TXT is incomplete.
   const out = [];
   const seen = new Set(); // case-insensitive dedupe
-
-  // 1) From mapping file (preferred labels)
   try {
     const labels = await loadCourseLabelsFromTxt();
     for (const v of labels || []) {
       const k = v.toLocaleLowerCase('de');
       if (!seen.has(k)) { seen.add(k); out.push(v); }
     }
-  } catch (_) { /* ignore */ }
-
-  // 2) From current lessons (mapped subjects)
+  } catch (_) {}
   for (const l of allLessons) {
     const s = mapSubject(l);
     if (!s) continue;
     const k = s.toLocaleLowerCase('de');
     if (!seen.has(k)) { seen.add(k); out.push(s); }
   }
-
-  // Sorted, stable list
   return out.sort((a,b)=>a.localeCompare(b,'de'));
 }
 

@@ -187,6 +187,56 @@ def api_mappings():
     room_map   = _parse_mapping(ROOM_MAP_PATH)
     return _no_store(jsonify({"ok": True, "courses": course_map, "rooms": room_map}))
 
+@app.route("/api/courses")
+def api_courses():
+    """Unified course list for selection: mapping RHS labels + seen variants + cached mapped lessons.
+    - Includes entries even if course_mapping.txt RHS is empty by falling back to a representative variant or pretty key.
+    - Sorted case-insensitively (de locale not available server-side; use basic lower()).
+    """
+    course_map = _parse_mapping(COURSE_MAP_PATH)  # { norm_key: display }
+    seen_variants = _group_variants(SEEN_SUBJECTS_RAW)  # { norm_key: [raw variants] }
+
+    display_set = set()
+
+    # 1) From mapping file: take non-empty RHS
+    for nk, disp in course_map.items():
+        if (disp or "").strip():
+            display_set.add(disp.strip())
+
+    # 2) From seen variants: if no RHS, choose a representative variant (shortest)
+    for nk, variants in seen_variants.items():
+        if not variants:
+            continue
+        if nk in course_map and (course_map[nk] or "").strip():
+            continue  # already covered by mapping label
+        rep = sorted(variants, key=lambda s: (len(s), s.lower()))[0]
+        display_set.add(rep)
+
+    # 3) From cached mapped lessons (optional)
+    try:
+        lm_path = os.path.join(ROOT, "lessons_mapped.json")
+        if os.path.exists(lm_path):
+            with open(lm_path, "r", encoding="utf-8") as f:
+                lessons = json.load(f)
+                if isinstance(lessons, list):
+                    for L in lessons:
+                        subj = (L.get("subject") or "").strip()
+                        if subj:
+                            display_set.add(subj)
+    except Exception:
+        pass
+
+    # 4) Also include mapping keys with empty RHS by prettifying the normalised key
+    for nk, disp in course_map.items():
+        if (disp or "").strip():
+            continue
+        pretty = " ".join(w.capitalize() for w in nk.split())
+        if pretty:
+            display_set.add(pretty)
+
+    out = sorted(display_set, key=lambda s: (s.lower(), s))
+    return _no_store(jsonify({"ok": True, "courses": out}))
+
 @app.route("/api/health")
 def api_health():
     return no_store(make_response(jsonify({"ok": True}), 200))
