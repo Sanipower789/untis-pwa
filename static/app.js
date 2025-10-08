@@ -119,6 +119,15 @@ function mapRoom(lesson) {
   return live;
 }
 
+// Override: ensure unmapped subjects fall back to the raw subject for stable filtering
+function mapSubject(lesson) {
+  const orig = lesson.subject_original ?? lesson.subject ?? "";
+  const val = lookup(COURSE_MAP, orig);
+  if (val !== undefined && val !== null && val !== "") return val;
+  if (val === "") return orig || lesson.subject || "";
+  return orig || lesson.subject || "";
+}
+
 /* ================== KLAUSUREN (Local) ================== */
 const LS_KLAUS = "klausuren_v1";
 const KlausurenStore = {
