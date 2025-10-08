@@ -6,6 +6,37 @@ from flask import (
     redirect, url_for, session
 )
 
+import time, json, os, traceback
+from flask import jsonify, make_response
+
+LAST_GOOD_PATH = "last_good_timetable.json"
+LAST_GOOD = None
+LAST_GOOD_TS = 0
+
+def no_store(resp):
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+def load_last_good():
+    global LAST_GOOD, LAST_GOOD_TS
+    try:
+        if os.path.exists(LAST_GOOD_PATH):
+            with open(LAST_GOOD_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                LAST_GOOD = data
+                LAST_GOOD_TS = data.get("_cachedAt", 0)
+    except Exception:
+        pass
+
+def save_last_good(payload):
+    try:
+        with open(LAST_GOOD_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+    except Exception:
+        pass
+
+load_last_good()
+
 # ---- Untis client (your existing implementation) ----
 from untis_client import fetch_week
 
@@ -155,6 +186,10 @@ def api_mappings():
     course_map = _parse_mapping(COURSE_MAP_PATH)
     room_map   = _parse_mapping(ROOM_MAP_PATH)
     return _no_store(jsonify({"ok": True, "courses": course_map, "rooms": room_map}))
+
+@app.route("/api/health")
+def api_health():
+    return no_store(make_response(jsonify({"ok": True}), 200))
 
 @app.route("/api/timetable")
 def api_timetable():

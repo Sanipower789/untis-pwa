@@ -166,17 +166,30 @@ async function loadCourseLabelsFromTxt() {
 
 /** Build the subjects list for the selection pane. */
 async function subjectsForSelection(allLessons) {
-  // 1) Prefer the labels from course_mapping.txt
-  const labels = await loadCourseLabelsFromTxt();
-  if (labels && labels.length) return labels.slice();
+  // Merge labels from course_mapping.txt with subjects seen in lessons.
+  // This ensures we don't hide courses just because the TXT is incomplete.
+  const out = [];
+  const seen = new Set(); // case-insensitive dedupe
 
-  // 2) Fallback: use mapped subjects from current lessons (if TXT not reachable)
-  const set = new Set();
+  // 1) From mapping file (preferred labels)
+  try {
+    const labels = await loadCourseLabelsFromTxt();
+    for (const v of labels || []) {
+      const k = v.toLocaleLowerCase('de');
+      if (!seen.has(k)) { seen.add(k); out.push(v); }
+    }
+  } catch (_) { /* ignore */ }
+
+  // 2) From current lessons (mapped subjects)
   for (const l of allLessons) {
     const s = mapSubject(l);
-    if (s) set.add(s);
+    if (!s) continue;
+    const k = s.toLocaleLowerCase('de');
+    if (!seen.has(k)) { seen.add(k); out.push(s); }
   }
-  return Array.from(set).sort((a,b)=>a.localeCompare(b,'de'));
+
+  // Sorted, stable list
+  return out.sort((a,b)=>a.localeCompare(b,'de'));
 }
 
 /* ===== Sidebar (Klausuren) ===== */
