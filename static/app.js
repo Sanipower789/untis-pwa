@@ -74,8 +74,7 @@ const normKey = (s) => {
         .replace(/\s+/g, " ")
         .replace(/\(.*?\)/g, " ")
         .replace(/\s*-\s*.*$/g, " ")
-        .replace(/\b(gk|lk|ag)\b/g, " ")
-        .replace(/\b\d+\b/g, " ");
+        .replace(/\b(gk|lk|ag)\b/g, " ");
   return s.replace(/\s+/g, " ").trim();
 };
 

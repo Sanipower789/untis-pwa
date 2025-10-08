@@ -60,7 +60,6 @@ def norm_key(s: str) -> str:
     s = re.sub(r"\(.*?\)", " ", s)          # remove (…) blocks
     s = re.sub(r"\s*-\s*.*$", " ", s)       # cut after dash
     s = re.sub(r"\b(gk|lk|ag)\b", " ", s)   # simple tags
-    s = re.sub(r"\b\d+\b", " ", s)          # lone numbers
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
