@@ -52,12 +52,12 @@ ADMIN_TOKEN    = os.environ.get("ADMIN_TOKEN")
 _UML = str.maketrans({"ä":"a","ö":"o","ü":"u","Ä":"a","Ö":"o","Ü":"u"})
 
 def norm_key(s: str) -> str:
-    """Canonical key for subjects/rooms: lower, umlaut fold, strip () content, dashes, tags, collapse spaces."""
+    """Canonical key for subjects/rooms: lower, umlaut fold, drop paren chars, dashes, tags, collapse spaces."""
     if not s:
         return ""
     s = s.strip().translate(_UML).lower()
     s = re.sub(r"\s+", " ", s)
-    s = re.sub(r"\(.*?\)", " ", s)          # remove (…) blocks
+    s = s.replace("(", " ").replace(")", " ")  # keep inner text
     s = re.sub(r"\s*-\s*.*$", " ", s)       # cut after dash
     s = re.sub(r"\b(gk|lk|ag)\b", " ", s)   # simple tags
     s = re.sub(r"\s+", " ", s).strip()

@@ -75,7 +75,7 @@ const normKey = (s) => {
         .replaceAll("Ä","a").replaceAll("Ö","o").replaceAll("Ü","u")
         .toLowerCase()
         .replace(/\s+/g, " ")
-        .replace(/\(.*?\)/g, " ")
+        .replace(/[()]/g, " ")
         .replace(/\s*-\s*.*$/g, " ")
         .replace(/\b(gk|lk|ag)\b/g, " ");
   return s.replace(/\s+/g, " ").trim();
@@ -554,7 +554,7 @@ async function loadTimetable(force = false) {
 
     const cs = document.getElementById("course-selection");
     if (cs && !cs.dataset.init) {
-      buildCourseSelection(lessons);
+      await buildCourseSelection(lessons);
       cs.dataset.init = "1";
     }
 
