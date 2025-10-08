@@ -180,24 +180,13 @@ async function subjectsForSelection(allLessons) {
     }
   } catch (_) { /* fall back below */ }
 
-  // 1) Merge labels from course_mapping.txt with subjects seen in lessons.
-  //    This ensures we don't hide courses just because the TXT is incomplete.
-  const out = [];
-  const seen = new Set(); // case-insensitive dedupe
+  // 1) Fallback: only labels parsed from course_mapping.txt
   try {
     const labels = await loadCourseLabelsFromTxt();
-    for (const v of labels || []) {
-      const k = v.toLocaleLowerCase('de');
-      if (!seen.has(k)) { seen.add(k); out.push(v); }
-    }
-  } catch (_) {}
-  for (const l of allLessons) {
-    const s = mapSubject(l);
-    if (!s) continue;
-    const k = s.toLocaleLowerCase('de');
-    if (!seen.has(k)) { seen.add(k); out.push(s); }
+    return labels;
+  } catch (_) {
+    return [];
   }
-  return out.sort((a,b)=>a.localeCompare(b,'de'));
 }
 
 /* ===== Sidebar (Klausuren) ===== */
