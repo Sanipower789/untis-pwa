@@ -329,8 +329,6 @@ navKlausuren?.addEventListener('click', () => {
   navKlausuren.classList.add('active');
   document.querySelectorAll('.sidebar-panel').forEach(p=>p.style.display='none');
   panelKlausuren.style.display='block';
-  const accordion = document.getElementById('klausurAccordion');
-  if (accordion && typeof accordion.open === "boolean") accordion.open = true;
   populateKlausurSubjects(window.__latestLessons || []);
   populateKlausurPeriods();
   renderKlausurList();
