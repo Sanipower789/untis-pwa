@@ -51,31 +51,35 @@
 
     <!-- Klausuren Panel -->
     <section id="panelKlausuren" class="sidebar-panel">
-      <h3>Klausuren verwalten</h3>
-      <form id="klausurForm" class="form">
-        <label>Fach
-          <select id="klausurSubject" required></select>
-        </label>
-        <label>Name
-          <input id="klausurName" type="text" placeholder="z. B. Grammatik-Test" required />
-        </label>
-        <label>Datum
-          <input id="klausurDate" type="date" required />
-        </label>
-        <label>Stunde (Start)
-          <select id="klausurPeriodStart" required></select>
-        </label>
-        <label>Bis (inkl.)
-          <select id="klausurPeriodEnd" required></select>
-        </label>
-        <div class="row">
-          <button type="submit" class="primary">Speichern</button>
-          <button type="button" id="klausurReset" class="plain">Neu</button>
-        </div>
-      </form>
+      <details id="klausurAccordion" class="accordion">
+        <summary>Klausuren verwalten</summary>
+        <div class="accordion-body">
+          <form id="klausurForm" class="form">
+            <label>Fach
+              <select id="klausurSubject" required></select>
+            </label>
+            <label>Name
+              <input id="klausurName" type="text" placeholder="z. B. Grammatik-Test" required />
+            </label>
+            <label>Datum
+              <input id="klausurDate" type="date" required />
+            </label>
+            <label>Stunde (Start)
+              <select id="klausurPeriodStart" required></select>
+            </label>
+            <label>Bis (inkl.)
+              <select id="klausurPeriodEnd" required></select>
+            </label>
+            <div class="row">
+              <button type="submit" class="primary">Speichern</button>
+              <button type="button" id="klausurReset" class="plain">Neu</button>
+            </div>
+          </form>
 
-      <h4>Geplante Klausuren</h4>
-      <div id="klausurList" class="klausur-list"></div>
+          <h4>Geplante Klausuren</h4>
+          <div id="klausurList" class="klausur-list"></div>
+        </div>
+      </details>
     </section>
   </aside>
 
