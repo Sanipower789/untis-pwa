@@ -329,6 +329,8 @@ navKlausuren?.addEventListener('click', () => {
   navKlausuren.classList.add('active');
   document.querySelectorAll('.sidebar-panel').forEach(p=>p.style.display='none');
   panelKlausuren.style.display='block';
+  const accordion = document.getElementById("klausurAccordion");
+  if (accordion && !accordion.hasAttribute("open")) accordion.setAttribute("open", "");
   populateKlausurSubjects(window.__latestLessons || []);
   populateKlausurPeriods();
   renderKlausurList();
@@ -834,6 +836,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(()=>loadTimetable(true), 5*60*1000);
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });
+
 
 
 
