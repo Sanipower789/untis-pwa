@@ -770,10 +770,9 @@ async function loadTimetable(force = false) {
     });
 
     buildGrid(lessons, typeof data.weekStart === "string" ? data.weekStart : null, window.__selectedCourseKeys);
-    if (elSidebar?.classList.contains('show')) {
-      populateKlausurSubjects(lessons);
-      populateKlausurPeriods();
-    }
+    populateKlausurSubjects(lessons);
+    populateKlausurPeriods();
+    renderKlausurList();
   } catch (err) {
     const container = document.getElementById("timetable");
     if (container) {
