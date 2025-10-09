@@ -79,6 +79,21 @@ const PERIOD_SCHEDULE = {
 const PERIOD_NUMBERS = Object.keys(PERIOD_SCHEDULE).map(n => Number(n)).sort((a,b)=>a-b);
 const periodStartMinutes = (p) => { const info = PERIOD_SCHEDULE[p]; return info ? parseHM(info.start) : null; };
 const periodEndMinutes   = (p) => { const info = PERIOD_SCHEDULE[p]; return info ? parseHM(info.end) : null; };
+const STATUS_LABELS = { entfaellt: 'Entfällt', vertretung: 'Vertretung', aenderung: 'Änderung', klausur: 'Klausur' };
+
+const formatDate = (iso) => {
+  if (!iso) return '';
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('de-DE');
+};
+
+const formatTimeRange = (start, end) => {
+  if (!start && !end) return '';
+  if (!start) return end;
+  if (!end) return start;
+  return `${start} – ${end}`;
+};
 const formatPeriodRange = (start, end) => {
   if (!Number.isFinite(start) || !PERIOD_SCHEDULE[start]) return "";
   const s = PERIOD_SCHEDULE[start];
@@ -319,6 +334,13 @@ const selPeriodEnd   = document.getElementById('klausurPeriodEnd');
 const btnKlausurReset= document.getElementById('klausurReset');
 const listKlausuren  = document.getElementById('klausurList');
 
+const overlayRoot   = document.getElementById('lesson-overlay');
+const overlayTitle  = document.getElementById('lesson-overlay-title');
+const overlaySubtitle = document.getElementById('lesson-overlay-subtitle');
+const overlayMeta   = document.getElementById('lesson-overlay-meta');
+const overlayNote   = document.getElementById('lesson-overlay-note');
+const overlayClose  = document.getElementById('lesson-overlay-close');
+
 function sidebarShow(){ elSidebar.classList.add('show'); }
 function sidebarHide(){ elSidebar.classList.remove('show'); }
 btnSidebar?.addEventListener('click', sidebarShow);
@@ -339,6 +361,47 @@ function showKlausurenPanel() {
 navKlausuren?.addEventListener('click', showKlausurenPanel);
 showKlausurenPanel();
 
+
+function hideLessonOverlay(){
+  if (!overlayRoot) return;
+  overlayRoot.setAttribute('aria-hidden','true');
+  document.body.style.removeProperty('overflow');
+}
+
+function showLessonOverlay(payload){
+  if (!overlayRoot) return;
+  const { title, subtitle, meta = [], note = '' } = payload || {};
+  overlayTitle.textContent = title || '';
+  overlaySubtitle.textContent = subtitle || '';
+  overlaySubtitle.style.display = subtitle ? '' : 'none';
+  overlayMeta.innerHTML = '';
+  meta.forEach(({ label, value }) => {
+    if (!label || !value) return;
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    overlayMeta.appendChild(dt);
+    overlayMeta.appendChild(dd);
+  });
+  if (note && note.trim()) {
+    overlayNote.textContent = note.trim();
+    overlayNote.style.display = '';
+  } else {
+    overlayNote.textContent = '';
+    overlayNote.style.display = 'none';
+  }
+  overlayRoot.setAttribute('aria-hidden','false');
+  document.body.style.overflow = 'hidden';
+}
+
+overlayRoot?.addEventListener('click', (e) => {
+  if (e.target === overlayRoot || e.target.classList.contains('lesson-overlay-backdrop')) hideLessonOverlay();
+});
+overlayClose?.addEventListener('click', hideLessonOverlay);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hideLessonOverlay();
+});
 
 btnKlausurReset?.addEventListener('click', () => {
   formKlausur.reset();
@@ -501,6 +564,7 @@ async function buildCourseSelection(allLessons) {
 }
 
 function buildGrid(lessons, weekStart = null, selectedKeys = null) {
+  hideLessonOverlay();
   const container = document.getElementById("timetable");
   container.innerHTML = "";
 
@@ -640,13 +704,6 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
     card.className = `lesson ${klausur ? "klausur" : (l.status || "")}`.trim();
     card.style.gridColumn = String(day + 1);
 
-    const badgeMap = {
-      entfaellt: "Entfaellt",
-      vertretung: "Vertretung",
-      aenderung: "Aenderung"
-    };
-    const badge = badgeMap[l.status] || "";
-
     const subj = mapSubject(l);
     const room = mapRoom(l);
 
@@ -659,6 +716,10 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
       const rowStart = rowIndexFor(startMin);
       const rowEnd = rowIndexFor(endMin);
       const spanK = Math.max(1, rowEnd - rowStart);
+      const startTime = fmtHM(startMin);
+      const endTime = fmtHM(endMin);
+      const datePretty = formatDate(klausur.date || l.date);
+      const periodLabel = formatPeriodRange(startPeriod, endPeriod);
       card.style.gridRow = `${rowStart + 2} / span ${spanK}`;
       card.innerHTML = `
         <div class="lesson-title">Klausur</div>
@@ -667,7 +728,20 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
           ${klausur.subject ? `<span>&bull; ${escapeHtml(klausur.subject)}</span>` : ""}
         </div>
       `;
+      const meta = [
+        { label: "Datum", value: datePretty },
+        { label: "Zeitraum", value: `${periodLabel} (${formatTimeRange(startTime, endTime)})` }
+      ];
+      if (klausur.subject) meta.push({ label: "Fach", value: klausur.subject });
+      card.addEventListener("click", () => showLessonOverlay({
+        title: klausur.name || "Klausur",
+        subtitle: klausur.subject ? `${klausur.subject} · ${datePretty}` : datePretty,
+        meta
+      }));
     } else {
+      const datePretty = formatDate(l.date);
+      const timeRange = formatTimeRange(l.start, l.end);
+      const badge = (l.status && l.status !== "normal") ? (STATUS_LABELS[l.status] || l.status) : "";
       card.style.gridRow = `${r0 + 2} / span ${span}`;
       card.innerHTML = `
         <div class="lesson-title">${escapeHtml(subj)}</div>
@@ -678,6 +752,19 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
         ${badge ? `<div class="badge">${badge}</div>` : ""}
         ${l.note ? `<div class="note">${escapeHtml(l.note)}</div>` : ""}
       `;
+      const meta = [
+        { label: "Datum", value: datePretty },
+        { label: "Zeit", value: timeRange }
+      ];
+      if (l.teacher) meta.push({ label: "Lehrkraft", value: l.teacher });
+      if (room) meta.push({ label: "Raum", value: room });
+      if (badge) meta.push({ label: "Status", value: badge });
+      card.addEventListener("click", () => showLessonOverlay({
+        title: subj || "Unterricht",
+        subtitle: timeRange ? `${datePretty} · ${timeRange}` : datePretty,
+        meta,
+        note: l.note || ""
+      }));
     }
 
     grid.appendChild(card);
@@ -689,29 +776,43 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
     if (day < 1 || day > 5) return;
     const examKey = resolveCourseKey(k.subject) || normKey(k.subject || "");
     if (activeSelected && activeSelected.size > 0 && examKey && !activeSelected.has(examKey)) return;
-    const startPeriod = k.periodStart || 1;
-    const endPeriod = k.periodEnd || startPeriod;
-    const startMin = periodStartMinutes(startPeriod);
-    const endMin = periodEndMinutes(endPeriod);
-    if (startMin === null || endMin === null) return;
-    const rowStart = rowIndexFor(startMin);
-    const rowEnd = rowIndexFor(endMin);
-    const span = Math.max(1, rowEnd - rowStart);
+  const startPeriod = k.periodStart || 1;
+  const endPeriod = k.periodEnd || startPeriod;
+  const startMin = periodStartMinutes(startPeriod);
+  const endMin = periodEndMinutes(endPeriod);
+  if (startMin === null || endMin === null) return;
+  const rowStart = rowIndexFor(startMin);
+  const rowEnd = rowIndexFor(endMin);
+  const span = Math.max(1, rowEnd - rowStart);
 
-    const card = document.createElement("div");
-    card.className = "lesson klausur";
-    card.style.gridColumn = String(day + 1);
-    card.style.gridRow = `${rowStart + 2} / span ${span}`;
-    card.innerHTML = `
-      <div class="lesson-title">Klausur</div>
-      <div class="lesson-meta">
-        <span>${escapeHtml(k.name || "Klausur")}</span>
-        ${k.subject ? `<span>&bull; ${escapeHtml(k.subject)}</span>` : ""}
+  const card = document.createElement("div");
+  card.className = "lesson klausur";
+  card.style.gridColumn = String(day + 1);
+  card.style.gridRow = `${rowStart + 2} / span ${span}`;
+  card.innerHTML = `
+    <div class="lesson-title">Klausur</div>
+    <div class="lesson-meta">
+      <span>${escapeHtml(k.name || "Klausur")}</span>
+      ${k.subject ? `<span>&bull; ${escapeHtml(k.subject)}</span>` : ""}
 
-      </div>
-    `;
-    grid.appendChild(card);
-  });
+    </div>
+  `;
+  const datePretty = formatDate(k.date);
+  const startTime = fmtHM(startMin);
+  const endTime = fmtHM(endMin);
+  const periodLabel = formatPeriodRange(startPeriod, endPeriod);
+  const meta = [
+    { label: "Datum", value: datePretty },
+    { label: "Zeitraum", value: `${periodLabel} (${formatTimeRange(startTime, endTime)})` }
+  ];
+  if (k.subject) meta.push({ label: "Fach", value: k.subject });
+  card.addEventListener("click", () => showLessonOverlay({
+    title: k.name || "Klausur",
+    subtitle: k.subject ? `${k.subject} · ${datePretty}` : datePretty,
+    meta
+  }));
+  grid.appendChild(card);
+});
   // Placeholder for empty weekdays (full column)
   for (let d = 1; d <= 5; d++) {
     if (daysWithLessons.has(d)) continue;

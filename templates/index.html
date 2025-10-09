@@ -97,6 +97,19 @@
     <section id="timetable"></section>
   </main>
 
+  <div id="lesson-overlay" class="lesson-overlay" aria-hidden="true">
+    <div class="lesson-overlay-backdrop"></div>
+    <div class="lesson-overlay-card" role="dialog" aria-modal="true" aria-labelledby="lesson-overlay-title">
+      <button type="button" id="lesson-overlay-close" class="lesson-overlay-close" aria-label="Schliessen">×</button>
+      <header>
+        <h2 id="lesson-overlay-title"></h2>
+        <p id="lesson-overlay-subtitle" class="muted"></p>
+      </header>
+      <dl id="lesson-overlay-meta"></dl>
+      <div id="lesson-overlay-note" class="lesson-overlay-note"></div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', filename='app.js') }}?v=27"></script>
   <script>
     if ("serviceWorker" in navigator) {
