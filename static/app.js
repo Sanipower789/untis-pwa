@@ -98,7 +98,7 @@ const normKey = (s) => {
         .toLowerCase()
         .replace(/\s+/g, " ")
         .replace(/[()]/g, " ")
-        .replace(/\s*-\s*.*$/g, " ")
+        .replace(/[-–—]+/g, " ")
         .replace(/\b(gk|lk|ag)\b/g, " ");
   return s.replace(/\s+/g, " ").trim();
 };
@@ -374,7 +374,7 @@ formKlausur?.addEventListener('submit', (e) => {
     periodEnd: end
   });
   renderKlausurList();
-  if (window.__latestLessons) buildGrid(window.__latestLessons);
+  if (window.__latestLessons) buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys);
 });
 
 function renderKlausurList() {
@@ -400,7 +400,7 @@ function renderKlausurList() {
     el.querySelector('button').addEventListener('click', () => {
       KlausurenStore.remove(k.id);
       renderKlausurList();
-      if (window.__latestLessons) buildGrid(window.__latestLessons);
+      if (window.__latestLessons) buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys);
     });
     listKlausuren.appendChild(el);
   });
@@ -417,10 +417,7 @@ function populateKlausurSubjects(lessons) {
 function populateKlausurPeriods() {
   if (!selPeriodStart || !selPeriodEnd) return;
   const optionsHtml = PERIOD_NUMBERS
-    .map(num => {
-      const info = PERIOD_SCHEDULE[num];
-      return `<option value="${num}">${num}. Stunde (${info.start} - ${info.end} Uhr)</option>`;
-    })
+    .map(num => `<option value="${num}">${num}. Stunde</option>`)
     .join('');
   selPeriodStart.innerHTML = optionsHtml;
   selPeriodEnd.innerHTML = optionsHtml;
@@ -497,17 +494,37 @@ async function buildCourseSelection(allLessons) {
   }
 }
 
-function buildGrid(lessons) {
+function buildGrid(lessons, weekStart = null, selectedKeys = null) {
   const container = document.getElementById("timetable");
   container.innerHTML = "";
 
   // snapshot for sidebar dropdowns
   window.__latestLessons = lessons;
+  if (typeof weekStart === "string") {
+    window.__currentWeekStart = weekStart;
+  } else if (typeof window.__currentWeekStart === "string") {
+    weekStart = window.__currentWeekStart;
+  }
+  if (selectedKeys instanceof Set) {
+    window.__selectedCourseKeys = new Set(selectedKeys);
+  }
+  const activeSelected = selectedKeys instanceof Set
+    ? selectedKeys
+    : (window.__selectedCourseKeys instanceof Set ? window.__selectedCourseKeys : null);
+
+  const weekStartDate = typeof weekStart === "string" ? new Date(`${weekStart}T00:00:00`) : null;
+  const weekEndDate = weekStartDate ? new Date(weekStartDate.getTime() + 6 * 24 * 3600 * 1000) : null;
+  const isWithinWeek = (dateStr) => {
+    if (!weekStartDate) return true;
+    const dt = new Date(`${dateStr}T00:00:00`);
+    return !(Number.isNaN(dt.getTime())) && dt >= weekStartDate && dt <= weekEndDate;
+  };
 
   // Mon–Fri only + collect time boundaries
   const tset = new Set();
   const valid = [];
-  const klausurenList = KlausurenStore.load();
+  const klausurenList = KlausurenStore.load().filter(k => isWithinWeek(k.date));
+  const matchedKlausurIds = new Set();
   for (const l of lessons) {
     const d = dayIdxISO(l.date);
     if (d >= 1 && d <= 5) {
@@ -530,6 +547,10 @@ function buildGrid(lessons) {
   }
 
   const daysWithLessons = new Set(valid.map(l => dayIdxISO(l.date)));
+  klausurenList.forEach(k => {
+    const day = dayIdxISO(k.date);
+    if (day >= 1 && day <= 5) daysWithLessons.add(day);
+  });
 
   const ROW_NORMAL = 72;
   const ROW_BREAK  = 36;
@@ -622,6 +643,7 @@ function buildGrid(lessons) {
     const room = mapRoom(l);
 
     if (klausur) {
+      if (klausur.id) matchedKlausurIds.add(klausur.id);
       const startPeriod = klausur.periodStart || periodNum;
       const endPeriod = klausur.periodEnd || startPeriod;
       const startMin = periodStartMinutes(startPeriod) ?? s;
@@ -652,6 +674,37 @@ function buildGrid(lessons) {
       `;
     }
 
+    grid.appendChild(card);
+  });
+
+  klausurenList.forEach(k => {
+    if (k.id && matchedKlausurIds.has(k.id)) return;
+    const day = dayIdxISO(k.date);
+    if (day < 1 || day > 5) return;
+    const examKey = resolveCourseKey(k.subject) || normKey(k.subject || "");
+    if (activeSelected && activeSelected.size > 0 && examKey && !activeSelected.has(examKey)) return;
+    const startPeriod = k.periodStart || 1;
+    const endPeriod = k.periodEnd || startPeriod;
+    const startMin = periodStartMinutes(startPeriod);
+    const endMin = periodEndMinutes(endPeriod);
+    if (startMin === null || endMin === null) return;
+    const rowStart = rowIndexFor(startMin);
+    const rowEnd = rowIndexFor(endMin);
+    const span = Math.max(1, rowEnd - rowStart);
+
+    const card = document.createElement("div");
+    card.className = "lesson klausur";
+    card.style.gridColumn = String(day + 1);
+    card.style.gridRow = `${rowStart + 2} / span ${span}`;
+    const rangeLabel = formatPeriodRange(startPeriod, endPeriod);
+    card.innerHTML = `
+      <div class="lesson-title">Klausur</div>
+      <div class="lesson-meta">
+        <span>${escapeHtml(k.name || "Klausur")}</span>
+        ${k.subject ? `<span>&bull; ${escapeHtml(k.subject)}</span>` : ""}
+        <span>&bull; ${escapeHtml(rangeLabel)}</span>
+      </div>
+    `;
     grid.appendChild(card);
   });
   // Placeholder for empty weekdays (full column)
@@ -695,6 +748,7 @@ async function loadTimetable(force = false) {
     const { keys: selectedKeys, changed } = normaliseCourseSelection(storedValues);
     if (changed) setCourses(selectedKeys);
     const selectedSet = new Set(selectedKeys);
+    window.__selectedCourseKeys = new Set(selectedSet);
 
     if (selectedSet.size > 0) {
       lessons = lessons.filter((l) => {
@@ -710,7 +764,7 @@ async function loadTimetable(force = false) {
       return mapSubject(a).localeCompare(mapSubject(b), "de");
     });
 
-    buildGrid(lessons);
+    buildGrid(lessons, typeof data.weekStart === "string" ? data.weekStart : null, window.__selectedCourseKeys);
     if (elSidebar?.classList.contains('show')) {
       populateKlausurSubjects(lessons);
       populateKlausurPeriods();

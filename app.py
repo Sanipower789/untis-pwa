@@ -58,7 +58,7 @@ def norm_key(s: str) -> str:
     s = s.strip().translate(_UML).lower()
     s = re.sub(r"\s+", " ", s)
     s = s.replace("(", " ").replace(")", " ")  # keep inner text
-    s = re.sub(r"\s*-\s*.*$", " ", s)       # cut after dash
+    s = re.sub(r"[-–—]+", " ", s)       # replace hyphen-like chars
     s = re.sub(r"\b(gk|lk|ag)\b", " ", s)   # simple tags
     s = re.sub(r"\s+", " ", s).strip()
     return s
