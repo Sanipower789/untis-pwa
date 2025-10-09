@@ -634,10 +634,12 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
     card.className = `lesson ${klausur ? "klausur" : (l.status || "")}`.trim();
     card.style.gridColumn = String(day + 1);
 
-    const badge =
-      l.status === "entfaellt" ? "?? Entf�llt" :
-      l.status === "vertretung" ? "?? Vertretung" :
-      l.status === "aenderung" ? "?? �nderung" : "";
+    const badgeMap = {
+      entfaellt: "Entfaellt",
+      vertretung: "Vertretung",
+      aenderung: "Aenderung"
+    };
+    const badge = badgeMap[l.status] || "";
 
     const subj = mapSubject(l);
     const room = mapRoom(l);
@@ -652,13 +654,11 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
       const rowEnd = rowIndexFor(endMin);
       const spanK = Math.max(1, rowEnd - rowStart);
       card.style.gridRow = `${rowStart + 2} / span ${spanK}`;
-      const rangeLabel = formatPeriodRange(startPeriod, endPeriod);
       card.innerHTML = `
         <div class="lesson-title">Klausur</div>
         <div class="lesson-meta">
           <span>${escapeHtml(klausur.name)}</span>
           ${klausur.subject ? `<span>&bull; ${escapeHtml(klausur.subject)}</span>` : ""}
-          <span>&bull; ${escapeHtml(rangeLabel)}</span>
         </div>
       `;
     } else {
@@ -666,8 +666,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
       card.innerHTML = `
         <div class="lesson-title">${escapeHtml(subj)}</div>
         <div class="lesson-meta">
-          ${l.teacher ? `<span>� ${escapeHtml(l.teacher)}</span>` : ""}
-          ${room ? `<span>� ${escapeHtml(room)}</span>` : ""}
+          ${l.teacher ? `<span>&bull; ${escapeHtml(l.teacher)}</span>` : ""}
+          ${room ? `<span>&bull; ${escapeHtml(room)}</span>` : ""}
         </div>
         ${badge ? `<div class="badge">${badge}</div>` : ""}
         ${l.note ? `<div class="note">${escapeHtml(l.note)}</div>` : ""}
@@ -696,13 +696,12 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
     card.className = "lesson klausur";
     card.style.gridColumn = String(day + 1);
     card.style.gridRow = `${rowStart + 2} / span ${span}`;
-    const rangeLabel = formatPeriodRange(startPeriod, endPeriod);
     card.innerHTML = `
       <div class="lesson-title">Klausur</div>
       <div class="lesson-meta">
         <span>${escapeHtml(k.name || "Klausur")}</span>
         ${k.subject ? `<span>&bull; ${escapeHtml(k.subject)}</span>` : ""}
-        <span>&bull; ${escapeHtml(rangeLabel)}</span>
+
       </div>
     `;
     grid.appendChild(card);
@@ -835,5 +834,6 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(()=>loadTimetable(true), 5*60*1000);
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
 });
+
 
 
