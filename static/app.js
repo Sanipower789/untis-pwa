@@ -324,17 +324,21 @@ function sidebarHide(){ elSidebar.classList.remove('show'); }
 btnSidebar?.addEventListener('click', sidebarShow);
 btnSidebarClose?.addEventListener('click', sidebarHide);
 
-navKlausuren?.addEventListener('click', () => {
+function showKlausurenPanel() {
   document.querySelectorAll('.sidebar-link').forEach(b=>b.classList.remove('active'));
-  navKlausuren.classList.add('active');
+  navKlausuren?.classList.add('active');
   document.querySelectorAll('.sidebar-panel').forEach(p=>p.style.display='none');
-  panelKlausuren.style.display='block';
-  const accordion = document.getElementById("klausurAccordion");
-  if (accordion && !accordion.hasAttribute("open")) accordion.setAttribute("open", "");
+  if (panelKlausuren) panelKlausuren.style.display='block';
+  const accordion = document.getElementById('klausurAccordion');
+  if (accordion && !accordion.hasAttribute('open')) accordion.setAttribute('open','');
   populateKlausurSubjects(window.__latestLessons || []);
   populateKlausurPeriods();
   renderKlausurList();
-});
+}
+
+navKlausuren?.addEventListener('click', showKlausurenPanel);
+showKlausurenPanel();
+
 
 btnKlausurReset?.addEventListener('click', () => {
   formKlausur.reset();
