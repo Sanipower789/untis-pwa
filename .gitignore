@@ -3,3 +3,4 @@ __pycache__/
 .env
 *.zip
 .vscode/
+user_data.db

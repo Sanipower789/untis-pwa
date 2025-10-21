@@ -1,13 +1,14 @@
-import os, json, time, re
+import os, json, time, re, sqlite3
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 from flask import (
     Flask, jsonify, render_template, request,
-    redirect, url_for, session
+    redirect, url_for, session, g
 )
 
 import time, json, os, traceback
 from flask import jsonify, make_response
+from werkzeug.security import generate_password_hash, check_password_hash
 
 LAST_GOOD_PATH = "last_good_timetable.json"
 LAST_GOOD = None
@@ -47,6 +48,126 @@ DATA   = ROOT  # keep mappings & seen files in project root
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(24))
 ADMIN_TOKEN    = os.environ.get("ADMIN_TOKEN")
+DB_PATH        = os.path.join(DATA, "user_data.db")
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+            password_hash TEXT NOT NULL,
+            profile_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+def get_db():
+    if "db" not in g:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        g.db = conn
+    return g.db
+
+@app.teardown_appcontext
+def close_db(exception):
+    conn = g.pop("db", None)
+    if conn is not None:
+        conn.close()
+
+init_db()
+
+def _current_user_id():
+    user_id = session.get("user_id")
+    if user_id is None:
+        return None
+    try:
+        return int(user_id)
+    except (TypeError, ValueError):
+        return None
+
+def _load_user(user_id):
+    if not user_id:
+        return None
+    db = get_db()
+    cur = db.execute(
+        "SELECT id, username, password_hash, profile_json FROM users WHERE id = ?",
+        (user_id,)
+    )
+    return cur.fetchone()
+
+def _empty_profile():
+    return {"name": "", "courses": [], "klausuren": []}
+
+def _normalise_courses(value):
+    if not isinstance(value, list):
+        return []
+    seen = set()
+    out = []
+    for item in value:
+        if not isinstance(item, str):
+            item = str(item or "")
+        key = item.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+def _normalise_klausuren(items):
+    if not isinstance(items, list):
+        return []
+    cleaned = []
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        entry = {
+            "id": str(raw.get("id") or "").strip(),
+            "subject": str(raw.get("subject") or "").strip(),
+            "name": str(raw.get("name") or "").strip(),
+            "date": str(raw.get("date") or "").strip(),
+        }
+        try:
+            entry["periodStart"] = int(raw.get("periodStart"))
+        except (TypeError, ValueError):
+            entry["periodStart"] = None
+        try:
+            entry["periodEnd"] = int(raw.get("periodEnd"))
+        except (TypeError, ValueError):
+            entry["periodEnd"] = None
+        cleaned.append(entry)
+    return cleaned
+
+def _normalise_profile(payload):
+    if not isinstance(payload, dict):
+        payload = {}
+    profile = _empty_profile()
+    profile["name"] = str(payload.get("name") or "").strip()
+    profile["courses"] = _normalise_courses(payload.get("courses"))
+    profile["klausuren"] = _normalise_klausuren(payload.get("klausuren"))
+    return profile
+
+def _load_profile_for_user(row):
+    if not row:
+        return _empty_profile()
+    raw = row["profile_json"] if isinstance(row, sqlite3.Row) else row.get("profile_json")
+    try:
+        payload = json.loads(raw) if raw else {}
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    return _normalise_profile(payload)
+
+def _save_profile(user_id, profile):
+    db = get_db()
+    db.execute(
+        "UPDATE users SET profile_json = ? WHERE id = ?",
+        (json.dumps(_normalise_profile(profile)), user_id)
+    )
+    db.commit()
 
 # ---------- Normalisation (canonical across app) ----------
 _UML = str.maketrans({"ä":"a","ö":"o","ü":"u","Ä":"a","Ö":"o","Ü":"u"})
@@ -266,6 +387,83 @@ def api_timetable():
     _last_weekkey_payload[weekkey] = payload
     _last_weekkey_ts[weekkey] = time.time()
     return _no_store(jsonify(payload))
+
+def _auth_response(row):
+    profile = _load_profile_for_user(row) if row else _empty_profile()
+    return {
+        "ok": True,
+        "authenticated": bool(row),
+        "username": row["username"] if row else None,
+        "profile": profile
+    }
+
+@app.route("/api/auth/status")
+def api_auth_status():
+    user = _load_user(_current_user_id())
+    payload = _auth_response(user if user else None)
+    return _no_store(jsonify(payload))
+
+@app.route("/api/auth/register", methods=["POST"])
+def api_auth_register():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    if len(username) < 3 or len(password) < 6:
+        return jsonify({"ok": False, "error": "invalid_input"}), 400
+    db = get_db()
+    try:
+        cur = db.execute(
+            "INSERT INTO users (username, password_hash, profile_json) VALUES (?, ?, ?)",
+            (username, generate_password_hash(password), json.dumps(_empty_profile()))
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({"ok": False, "error": "username_exists"}), 409
+    session["user_id"] = cur.lastrowid
+    row = _load_user(cur.lastrowid)
+    return _no_store(jsonify(_auth_response(row))), 201
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    if not username or not password:
+        return jsonify({"ok": False, "error": "invalid_input"}), 400
+    row = None
+    if username:
+        row = get_db().execute(
+            "SELECT id, username, password_hash, profile_json FROM users WHERE username = ?",
+            (username,)
+        ).fetchone()
+    if not row or not check_password_hash(row["password_hash"], password):
+        return jsonify({"ok": False, "error": "invalid_credentials"}), 401
+    session["user_id"] = row["id"]
+    return _no_store(jsonify(_auth_response(row)))
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    session.pop("user_id", None)
+    return _no_store(jsonify({"ok": True, "authenticated": False}))
+
+@app.route("/api/profile", methods=["GET", "PUT"])
+def api_profile():
+    user_id = _current_user_id()
+    row = _load_user(user_id)
+    if not row:
+        session.pop("user_id", None)
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    if request.method == "GET":
+        payload = {
+            "ok": True,
+            "profile": _load_profile_for_user(row),
+            "username": row["username"]
+        }
+        return _no_store(jsonify(payload))
+    data = request.get_json(silent=True) or {}
+    profile = _normalise_profile(data)
+    _save_profile(user_id, profile)
+    return _no_store(jsonify({"ok": True, "profile": profile}))
 
 # ---- Admin auth/UI ----
 def _require_admin() -> bool:

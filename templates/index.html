@@ -33,8 +33,9 @@
       <h1>Mein Stundenplan</h1>
     </div>
     <div class="header-actions">
+      <button id="auth-button" class="plain">Anmelden</button>
       <button id="edit-courses">Kurse bearbeiten</button>
-      <button id="refresh-btn" title="Neu laden">🔄</button>
+      <button id="refresh-btn" title="Neu laden">??</button>
     </div>
   </header>
 
@@ -107,6 +108,44 @@
       </header>
       <dl id="lesson-overlay-meta"></dl>
       <div id="lesson-overlay-note" class="lesson-overlay-note"></div>
+    </div>
+  </div>
+
+  <div id="auth-modal" class="auth-modal" aria-hidden="true">
+    <div class="auth-backdrop"></div>
+    <div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+      <button type="button" id="auth-close" class="plain auth-close" aria-label="Schliessen">x</button>
+      <h2 id="auth-modal-title">Account</h2>
+      <p id="auth-description" class="muted">Melde dich an, um deine Einstellungen zu sichern.</p>
+      <div class="auth-tabs">
+        <button type="button" data-view="login" class="auth-tab active">Einloggen</button>
+        <button type="button" data-view="register" class="auth-tab">Registrieren</button>
+      </div>
+      <form id="login-form" class="auth-form">
+        <label>Benutzername
+          <input type="text" name="username" autocomplete="username" required>
+        </label>
+        <label>Passwort
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="primary">Einloggen</button>
+        <p class="auth-error muted" role="alert"></p>
+      </form>
+      <form id="register-form" class="auth-form" style="display:none;">
+        <label>Benutzername
+          <input type="text" name="username" autocomplete="username" required>
+        </label>
+        <label>Passwort
+          <input type="password" name="password" autocomplete="new-password" required>
+        </label>
+        <p class="muted small">Mindestens 3 Zeichen fuer den Namen, 6 fuer das Passwort.</p>
+        <button type="submit" class="primary">Registrieren</button>
+        <p class="auth-error muted" role="alert"></p>
+      </form>
+      <div id="account-view" class="auth-account" style="display:none;">
+        <p class="muted">Angemeldet als <strong id="account-username"></strong>.</p>
+        <button id="logout-button" type="button" class="plain">Abmelden</button>
+      </div>
     </div>
   </div>
 
