@@ -868,7 +868,7 @@ formKlausur?.addEventListener('submit', (e) => {
 
   if (!subject || !name || !date || !Number.isFinite(start) || !Number.isFinite(end)) return;
 
-  if (end < start) { alert('Bitte gib eine gueltige Stunden-Spanne an.'); return; }
+  if (end < start) { alert('Bitte gib eine gültige Stunden-Spanne an.'); return; }
 
 
 
@@ -876,7 +876,7 @@ formKlausur?.addEventListener('submit', (e) => {
 
   if (overlap) {
 
-    alert('Fuer dieses Datum existiert bereits eine Klausur in diesem Zeitraum.');
+    alert('Für dieses Datum existiert bereits eine Klausur in diesem Zeitraum.');
 
     return;
 
@@ -1008,6 +1008,24 @@ const Auth = (() => {
 
   let initDone = false;
 
+  let forceLogin = false;
+
+  const loginWaiters = [];
+
+  function setForceMode(flag) {
+    forceLogin = !!flag;
+    if (closeBtn) closeBtn.style.display = forceLogin ? "none" : "";
+    modal?.classList.toggle("auth-force", forceLogin);
+  }
+
+  function resolveLoginWaiters() {
+    if (!loginWaiters.length) return;
+    const copy = loginWaiters.splice(0);
+    copy.forEach(fn => {
+      try { fn(); } catch (_) {}
+    });
+  }
+
 
 
   function setButtonLabel() {
@@ -1050,9 +1068,19 @@ const Auth = (() => {
 
 
 
-  function openModal(view) {
+  function openModal(view, force = (!state.loggedIn || forceLogin)) {
 
     if (!modal) return;
+
+    if (force) {
+
+      setForceMode(true);
+
+    } else if (!forceLogin) {
+
+      setForceMode(false);
+
+    }
 
     modal.setAttribute("aria-hidden", "false");
 
@@ -1068,7 +1096,7 @@ const Auth = (() => {
 
   function closeModal() {
 
-    if (!modal) return;
+    if (!modal || forceLogin) return;
 
     modal.setAttribute("aria-hidden", "true");
 
@@ -1333,14 +1361,6 @@ const Auth = (() => {
 
     const password = String(formData.get("password") || "");
 
-    if (url.includes("register") && (username.length < 3 || password.length < 6)) {
-
-      if (errorEl) errorEl.textContent = "Benutzername oder Passwort zu kurz.";
-
-      return;
-
-    }
-
     if (!username || !password) {
 
       if (errorEl) errorEl.textContent = "Bitte gib Benutzername und Passwort ein.";
@@ -1421,7 +1441,11 @@ const Auth = (() => {
 
     if (state.loggedIn) {
 
-      if (description) description.textContent = "Deine Einstellungen werden jetzt zwischen deinen Geraeten synchronisiert.";
+      setForceMode(false);
+
+      if (description) description.textContent = "Deine Einstellungen werden jetzt zwischen deinen Geräten synchronisiert.";
+
+      resolveLoginWaiters();
 
     } else {
 
@@ -1435,7 +1459,19 @@ const Auth = (() => {
 
       }
 
-      if (description) description.textContent = "Melde dich an, um deine Einstellungen zu sichern.";
+      setForceMode(true);
+
+      if (description) description.textContent = "Bitte melde dich an, um fortzufahren.";
+
+      if (modal && modal.getAttribute("aria-hidden") === "false") {
+
+        showView("login");
+
+      } else {
+
+        openModal("login", true);
+
+      }
 
     }
 
@@ -1509,11 +1545,39 @@ const Auth = (() => {
 
     if (!modal) return;
 
+    if (forceLogin) return;
+
     if (e.target === modal || e.target.classList.contains("auth-backdrop")) {
 
       closeModal();
 
     }
+
+  }
+
+
+
+  function ensureAuthenticated() {
+
+    if (state.loggedIn) return Promise.resolve();
+
+    setForceMode(true);
+
+    if (modal?.getAttribute("aria-hidden") === "false") {
+
+      showView("login");
+
+    } else {
+
+      openModal("login", true);
+
+    }
+
+    return new Promise(resolve => {
+
+      loginWaiters.push(resolve);
+
+    });
 
   }
 
@@ -1541,7 +1605,7 @@ const Auth = (() => {
 
       document.addEventListener("keydown", (ev) => {
 
-        if (ev.key === "Escape" && modal?.getAttribute("aria-hidden") === "false") {
+        if (ev.key === "Escape" && !forceLogin && modal?.getAttribute("aria-hidden") === "false") {
 
           closeModal();
 
@@ -1593,7 +1657,9 @@ const Auth = (() => {
 
     username: () => state.username || "",
 
-    closeModal
+    closeModal,
+
+    ensureAuthenticated
 
   };
 
@@ -1879,7 +1945,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
   if (times.length < 2) {
 
-    container.innerHTML = `<div class="empty-week">? Bald verfügbar</div>`;
+    container.innerHTML = `<div class="empty-week">🗓️ Bald verfügbar</div>`;
 
     return;
 
@@ -2299,7 +2365,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
       <div class="ph-card" role="status" aria-label="Daten folgen">
 
-        <div class="ph-ico">?</div>
+        <div class="ph-ico">🗓️</div>
 
         <div class="ph-txt">Bald verfügbar</div>
 
@@ -2324,6 +2390,12 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 /* --- Fetch + refresh --- */
 
 async function loadTimetable(force = false) {
+
+  if (typeof Auth === "object" && Auth && typeof Auth.isLoggedIn === "function" && !Auth.isLoggedIn()) {
+
+    return;
+
+  }
 
   try {
 
@@ -2413,7 +2485,7 @@ async function loadTimetable(force = false) {
 
         <div class="empty-week">
 
-          ? Keine Daten geladen (offline oder Fehler).
+          ⚠️ Keine Daten geladen (offline oder Fehler).
 
         </div>`;
 
@@ -2497,15 +2569,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
     refreshBtn.addEventListener("click", () => {
 
+      if (typeof Auth.isLoggedIn === "function" && !Auth.isLoggedIn()) {
+
+        Auth.ensureAuthenticated();
+
+        return;
+
+      }
+
       refreshBtn.disabled = true;
 
-      refreshBtn.textContent = "?";
+      refreshBtn.textContent = "⏳";
 
       loadTimetable(true).finally(() => {
 
         refreshBtn.disabled = false;
 
-        refreshBtn.textContent = "??";
+        refreshBtn.textContent = "🔄";
 
       });
 
@@ -2533,9 +2613,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
       await Auth.init();
 
+      await Auth.ensureAuthenticated();
+
     } catch (err) {
 
       console.warn("Auth initialisation failed:", err);
+
+      return;
 
     }
 
@@ -2543,7 +2627,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     setInterval(()=>loadTimetable(true), 5*60*1000);
 
-    document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadTimetable(true); });
+    document.addEventListener("visibilitychange", ()=>{
+
+      if(!document.hidden) loadTimetable(true);
+
+    });
 
   })();
 

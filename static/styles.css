@@ -290,6 +290,8 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   background:rgba(10,10,14,.82);
   backdrop-filter:blur(4px);
 }
+.auth-modal.auth-force .auth-close{display:none;}
+.auth-modal.auth-force .auth-backdrop{cursor:default;}
 .auth-card{
   position:relative;
   margin:60px auto;

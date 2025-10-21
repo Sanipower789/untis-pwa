@@ -408,7 +408,7 @@ def api_auth_register():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
-    if len(username) < 3 or len(password) < 6:
+    if not username or not password:
         return jsonify({"ok": False, "error": "invalid_input"}), 400
     db = get_db()
     try:
