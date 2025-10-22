@@ -188,6 +188,18 @@ const formatDate = (iso) => {
 
 };
 
+const toISODate = (dateObj) => {
+
+  const y = dateObj.getFullYear();
+
+  const m = String(dateObj.getMonth() + 1).padStart(2, "0");
+
+  const d = String(dateObj.getDate()).padStart(2, "0");
+
+  return `${y}-${m}-${d}`;
+
+};
+
 
 
 const formatTimeRange = (start, end) => {
@@ -1956,7 +1968,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
       const current = new Date(weekStartDate.getTime() + offset * 24 * 3600 * 1000);
 
-      isoByDay[offset + 1] = current.toISOString().slice(0, 10);
+      isoByDay[offset + 1] = toISODate(current);
 
     }
 

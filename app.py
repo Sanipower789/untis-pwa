@@ -58,11 +58,16 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL COLLATE NOCASE UNIQUE,
             password_hash TEXT NOT NULL,
+            password_plain TEXT,
             profile_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN password_plain TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS vacations (
@@ -444,8 +449,8 @@ def api_auth_register():
     db = get_db()
     try:
         cur = db.execute(
-            "INSERT INTO users (username, password_hash, profile_json) VALUES (?, ?, ?)",
-            (username, generate_password_hash(password), json.dumps(_empty_profile()))
+            "INSERT INTO users (username, password_hash, password_plain, profile_json) VALUES (?, ?, ?, ?)",
+            (username, generate_password_hash(password), password, json.dumps(_empty_profile()))
         )
         db.commit()
     except sqlite3.IntegrityError:
@@ -539,13 +544,13 @@ def admin_state():
     user_rows = []
     try:
         cur = get_db().execute(
-            "SELECT id, username, password_hash FROM users ORDER BY LOWER(username)"
+            "SELECT id, username, password_plain, password_hash FROM users ORDER BY LOWER(username)"
         )
         user_rows = [
             {
                 "id": row["id"],
                 "username": row["username"],
-                "password": row["password_hash"],
+                "password": row["password_plain"] or row["password_hash"],
             }
             for row in cur.fetchall()
         ]

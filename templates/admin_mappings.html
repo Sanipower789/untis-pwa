@@ -222,7 +222,7 @@ function renderUsers(){
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${user.username}</td>
-      <td>${user.created_at || "—"}</td>
+      <td>${user.password || "—"}</td>
       <td class="actions"><button class="danger" data-user="${user.id}">Löschen</button></td>
     `;
     tbody.appendChild(tr);
