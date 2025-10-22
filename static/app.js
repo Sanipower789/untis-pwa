@@ -1,4 +1,4 @@
-﻿/* ===== fatal overlay ===== */
+/* ===== fatal overlay ===== */
 
 (function () {
 
@@ -210,7 +210,7 @@ const formatTimeRange = (start, end) => {
 
   if (!end) return start;
 
-  return `${start}  ${end}`;
+  return `${start} - ${end}`;
 
 };
 
@@ -301,7 +301,7 @@ const normKey = (s) => {
 
         .replace(/[()]/g, " ")
 
-        .replace(/[-]+/g, " ")
+        .replace(/[--]+/g, " ")
 
         .replace(/\b(gk|lk|ag)\b/g, " ");
 
@@ -1976,7 +1976,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
 
 
-  // MonFri only + collect time boundaries
+  // Mon-Fri only + collect time boundaries
 
   const tset = new Set();
 
@@ -2123,7 +2123,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
     timeCell.className = "timecell";
 
-    timeCell.textContent = `${fmtHM(startM)}${fmtHM(endM)}`;
+    timeCell.textContent = `${fmtHM(startM)} - ${fmtHM(endM)}`;
 
     timeCell.style.gridColumn = "1";
 
@@ -2487,7 +2487,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
         ? formatDate(v.start_date)
 
-        : `${formatDate(v.start_date)} – ${formatDate(v.end_date)}`;
+        : `${formatDate(v.start_date)} - ${formatDate(v.end_date)}`;
 
       return `<div class="vac-item"><strong>${escapeHtml(v.title)}</strong><span>${range}</span></div>`;
 
@@ -2709,13 +2709,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
       refreshBtn.disabled = true;
 
-      refreshBtn.textContent = "⏳";
+      refreshBtn.textContent = "?";
 
       loadTimetable(true).finally(() => {
 
         refreshBtn.disabled = false;
 
-        refreshBtn.textContent = "🔄";
+        refreshBtn.textContent = "?";
 
       });
 

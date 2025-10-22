@@ -150,6 +150,15 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   color:rgba(220,231,255,.7);
 }
 
+@media (max-width:600px){
+  .vacation-card{
+    align-items:center;
+    text-align:center;
+    padding:10px;
+  }
+  .vacation-card .vac-item{display:none;}
+}
+
 .lesson-title{
   font-weight:800;
   font-size: var(--font-title);
