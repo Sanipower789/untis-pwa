@@ -40,7 +40,9 @@
     td.actions button{padding:6px 10px;font-size:12px}
     code{background:#1d1e23;padding:2px 6px;border-radius:6px;font-size:12px;color:#dfe1e6}
     .empty-row td{text-align:center;color:var(--muted);font-size:12px;padding:10px 0}
-  </style>
+      label.stack{display:flex;flex-direction:column;gap:6px;font-size:13px;}
+    .settings-row input[type=range]{width:100%;}
+</style>
 </head>
 <body>
 <header>
@@ -126,6 +128,18 @@
       </table>
     </div>
   </div>
+  <div class="row settings-row">
+    <div class="card" id="settings">
+      <h2>Darstellung</h2>
+      <label class="stack">
+        Breite Zeitspalte
+        <input type="range" id="timeColWidth" min="40" max="120" value="60">
+        <span id="timeColWidthValue" class="muted">60 px</span>
+      </label>
+      <div class="foot"><button id="save-settings">Speichern</button></div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -136,7 +150,8 @@ const state = {
   courses: {}, rooms: {},
   subjects_grouped: {}, rooms_grouped: {},
   unmapped_subjects: [], unmapped_rooms: [],
-  users: [], vacations: []
+  users: [], vacations: [],
+  settings: { timeColumnWidth: "60" }
 };
 
 const fmtDate = (iso) => {
@@ -171,6 +186,7 @@ async function loadState(){
   state.unmapped_rooms = j.unmapped_rooms || [];
   state.users = Array.isArray(j.users) ? j.users : [];
   state.vacations = Array.isArray(j.vacations) ? j.vacations : [];
+  state.settings = j.settings || state.settings || { timeColumnWidth: "60" };
 
   $("#sub-count").textContent  = `${Object.keys(state.subjects_grouped).length} Schlüssel`;
   $("#room-count").textContent = `${Object.keys(state.rooms_grouped).length} Schlüssel`;
@@ -181,6 +197,7 @@ async function loadState(){
   renderTables();
   renderUsers();
   renderVacations();
+  renderSettings();
 }
 
 function renderTables(){
@@ -248,6 +265,16 @@ function renderVacations(){
     `;
     tbody.appendChild(tr);
   });
+}
+
+function renderSettings(){
+  const slider = document.getElementById("timeColWidth");
+  const label = document.getElementById("timeColWidthValue");
+  if (!slider || !label) return;
+  const raw = state.settings?.timeColumnWidth ?? "60";
+  const display = String(raw);
+  slider.value = display;
+  label.textContent = `${display} px`;
 }
 
 async function save(kind){
@@ -341,6 +368,42 @@ vacForm?.addEventListener("submit", async (ev) => {
     btn.disabled = false;
   }
 });
+
+const sliderTimeCol = document.getElementById("timeColWidth");
+const sliderTimeColValue = document.getElementById("timeColWidthValue");
+if (sliderTimeCol && sliderTimeColValue) {
+  sliderTimeCol.addEventListener("input", () => {
+    sliderTimeColValue.textContent = `${sliderTimeCol.value} px`;
+  });
+}
+
+const saveSettingsBtn = document.getElementById("save-settings");
+if (saveSettingsBtn) {
+  saveSettingsBtn.onclick = async () => {
+    if (!sliderTimeCol) return;
+    const raw = Number(sliderTimeCol.value);
+    const width = Number.isFinite(raw) ? Math.min(120, Math.max(40, Math.round(raw))) : 70;
+    saveSettingsBtn.disabled = true;
+    try {
+      const res = await fetch("/api/admin/save", {
+        method: "POST",
+        headers: {"content-type":"application/json"},
+        body: JSON.stringify({ settings: { timeColumnWidth: String(width) } })
+      });
+      const j = await res.json().catch(()=>({}));
+      if (j.ok) {
+        alert("Gespeichert.");
+        loadState();
+      } else {
+        alert(j.error || "Speichern fehlgeschlagen.");
+      }
+    } catch {
+      alert("Netzwerkfehler beim Speichern.");
+    } finally {
+      saveSettingsBtn.disabled = false;
+    }
+  };
+}
 
 loadState();
 </script>

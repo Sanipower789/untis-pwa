@@ -79,6 +79,19 @@ def init_db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    for key, value in SETTINGS_DEFAULTS.items():
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
+        )
     conn.commit()
     conn.close()
 
@@ -176,6 +189,35 @@ def _load_profile_for_user(row):
     except (TypeError, json.JSONDecodeError):
         payload = {}
     return _normalise_profile(payload)
+
+def _get_setting(key, default=None):
+    db = get_db()
+    cur = db.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cur.fetchone()
+    if row and row["value"] is not None:
+        return row["value"]
+    return SETTINGS_DEFAULTS.get(key, default)
+
+
+def _set_settings(values):
+    if not values:
+        return
+    db = get_db()
+    for key, value in values.items():
+        if key not in SETTINGS_DEFAULTS:
+            continue
+        if key == "timeColumnWidth":
+            try:
+                numeric = int(float(value))
+            except (TypeError, ValueError):
+                numeric = int(SETTINGS_DEFAULTS["timeColumnWidth"])
+            numeric = max(40, min(120, numeric))
+            value = str(numeric)
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, str(value))
+        )
+    db.commit()
 
 def _save_profile(user_id, profile):
     db = get_db()
@@ -380,7 +422,7 @@ def api_timetable():
         lessons = fetch_week(ws)  # your Untis client returns raw lessons
     except Exception as e:
         app.logger.exception("fetch_week failed")
-        payload = {"ok": False, "weekStart": str(ws), "lessons": [], "error": str(e)}
+        payload = {"ok": False, "weekStart": str(ws), "lessons": [], "error": str(e), "settings": settings_payload}
         _last_weekkey_payload[weekkey] = payload
         _last_weekkey_ts[weekkey] = time.time()
         return _no_store(jsonify(payload))
@@ -402,7 +444,15 @@ def api_timetable():
                 "server_now": datetime.now(APP_TZ).isoformat(), "week_start": ws.isoformat()
             }
 
-    payload = {"ok": True, "weekStart": str(ws), "lessons": lessons}
+    raw_width = _get_setting("timeColumnWidth", SETTINGS_DEFAULTS["timeColumnWidth"])
+    try:
+        width_value = int(float(raw_width))
+    except (TypeError, ValueError):
+        width_value = int(SETTINGS_DEFAULTS["timeColumnWidth"])
+    width_value = max(40, min(120, width_value))
+    settings_payload = {"timeColumnWidth": width_value}
+
+    payload = {"ok": True, "weekStart": str(ws), "lessons": lessons, "settings": settings_payload}
     _last_weekkey_payload[weekkey] = payload
     _last_weekkey_ts[weekkey] = time.time()
     return _no_store(jsonify(payload))
@@ -575,6 +625,8 @@ def admin_state():
     except sqlite3.Error:
         vacations = []
 
+    settings_payload = {key: _get_setting(key, default) for key, default in SETTINGS_DEFAULTS.items()}
+
     return _no_store(jsonify({
         "ok": True,
         "courses": courses,                # { norm_key: display }
@@ -584,7 +636,8 @@ def admin_state():
         "unmapped_subjects": unmapped_sub,
         "unmapped_rooms": unmapped_rm,
         "users": user_rows,
-        "vacations": vacations
+        "vacations": vacations,
+        "settings": settings_payload
     }))
 
 @app.route("/api/admin/save", methods=["POST"])
@@ -595,6 +648,7 @@ def admin_save():
     payload = request.get_json(silent=True) or {}
     new_courses: dict = payload.get("courses") or {}
     new_rooms: dict   = payload.get("rooms") or {}
+    new_settings: dict = payload.get("settings") or {}
 
     # load current
     courses = _parse_mapping(COURSE_MAP_PATH)
@@ -609,7 +663,15 @@ def admin_save():
     _write_mapping_txt(COURSE_MAP_PATH, courses)
     _write_mapping_txt(ROOM_MAP_PATH, rooms)
 
-    return _no_store(jsonify({"ok": True, "saved_courses": len(new_courses), "saved_rooms": len(new_rooms)}))
+    sanitized_settings = {}
+    if isinstance(new_settings, dict):
+        for key, value in new_settings.items():
+            if key in SETTINGS_DEFAULTS:
+                sanitized_settings[key] = str(value)
+    if sanitized_settings:
+        _set_settings(sanitized_settings)
+
+    return _no_store(jsonify({"ok": True, "saved_courses": len(new_courses), "saved_rooms": len(new_rooms), "saved_settings": len(sanitized_settings)}))
 
 @app.route("/api/admin/vacations", methods=["GET", "POST"])
 def admin_vacations():

@@ -128,6 +128,8 @@ const setName    = (v) => {
 
 let scheduleProfileSync = () => {};
 
+window.__timeColumnWidth = Math.min(120, Math.max(40, Math.round(Number(window.__timeColumnWidth || 60))));
+
 
 
 /* --- Helpers --- */
@@ -963,7 +965,7 @@ formKlausur?.addEventListener('submit', (e) => {
 
   renderKlausurList();
 
-  if (window.__latestLessons) buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys);
+  if (window.__latestLessons) buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys, window.__timeColumnWidth);
 
 });
 
@@ -1015,7 +1017,7 @@ function renderKlausurList() {
 
       renderKlausurList();
 
-      if (window.__latestLessons) buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys);
+      if (window.__latestLessons) buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys, window.__timeColumnWidth);
 
     });
 
@@ -1336,7 +1338,7 @@ const Auth = (() => {
 
     if (window.__latestLessons) {
 
-      buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys);
+      buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys, window.__timeColumnWidth);
 
     }
 
@@ -1806,19 +1808,21 @@ async function buildCourseSelection(allLessons) {
 
   const cs       = document.getElementById("course-selection");
 
-  const nameInput= document.getElementById("profile-name");
-
   const box      = document.getElementById("courses");
 
   const editBtn  = document.getElementById("edit-courses");
 
   const saveBtn  = document.getElementById("save-courses");
 
-  if (!cs || !nameInput || !box || !saveBtn || !editBtn) return;
+  const nameInput= document.getElementById("profile-name");
+
+  if (!cs || !box || !saveBtn || !editBtn) return;
 
 
 
-  nameInput.value = getName();
+  const storedName = getName();
+
+  if (nameInput) nameInput.value = storedName;
 
 
 
@@ -1868,7 +1872,9 @@ async function buildCourseSelection(allLessons) {
 
     setCourses(selected);
 
-    setName(nameInput.value.trim());
+    const nameValue = nameInput ? nameInput.value.trim() : storedName;
+
+    setName(nameValue);
 
     cs.style.display = "none";
 
@@ -1908,7 +1914,7 @@ async function buildCourseSelection(allLessons) {
 
 
 
-function buildGrid(lessons, weekStart = null, selectedKeys = null) {
+function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWidth = null) {
 
   hideLessonOverlay();
 
@@ -1943,6 +1949,26 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
     ? selectedKeys
 
     : (window.__selectedCourseKeys instanceof Set ? window.__selectedCourseKeys : null);
+
+
+
+  if (timeColumnWidth == null) {
+
+    timeColumnWidth = Number(window.__timeColumnWidth) || 60;
+
+  } else {
+
+    timeColumnWidth = Number(timeColumnWidth);
+
+    if (!Number.isFinite(timeColumnWidth) || timeColumnWidth <= 0) {
+
+      timeColumnWidth = Number(window.__timeColumnWidth) || 60;
+
+    }
+
+    window.__timeColumnWidth = timeColumnWidth;
+
+  }
 
 
 
@@ -2081,7 +2107,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
   grid.style.gridTemplateRows = [headerH + "px", ...rowHeights.map(h => h + "px")].join(" ");
 
-  grid.style.gridTemplateColumns = "70px repeat(5, minmax(0, 1fr))";
+  grid.style.gridTemplateColumns = `${timeColumnWidth}px repeat(5, minmax(0, 1fr))`;
 
 
 
@@ -2543,6 +2569,16 @@ async function loadTimetable(force = false) {
 
     let lessons = Array.isArray(data.lessons) ? data.lessons : [];
 
+    if (data && data.settings) {
+      const widthRaw = Number(data.settings.timeColumnWidth);
+      if (Number.isFinite(widthRaw)) {
+        window.__timeColumnWidth = Math.min(120, Math.max(40, Math.round(widthRaw)));
+      }
+    }
+
+    const timeColumnWidth = Math.min(120, Math.max(40, Math.round(Number(window.__timeColumnWidth) || 60)));
+    window.__timeColumnWidth = timeColumnWidth;
+
 
 
     const cs = document.getElementById("course-selection");
@@ -2597,7 +2633,7 @@ async function loadTimetable(force = false) {
 
 
 
-    buildGrid(lessons, typeof data.weekStart === "string" ? data.weekStart : null, window.__selectedCourseKeys);
+    buildGrid(lessons, typeof data.weekStart === "string" ? data.weekStart : null, window.__selectedCourseKeys, timeColumnWidth);
 
     populateKlausurSubjects(lessons);
 
@@ -2699,25 +2735,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     refreshBtn.addEventListener("click", () => {
 
-      if (typeof Auth.isLoggedIn === "function" && !Auth.isLoggedIn()) {
-
-        Auth.ensureAuthenticated();
-
-        return;
-
-      }
-
-      refreshBtn.disabled = true;
-
-      refreshBtn.textContent = "?";
-
-      loadTimetable(true).finally(() => {
-
-        refreshBtn.disabled = false;
-
-        refreshBtn.textContent = "?";
-
-      });
+      window.location.reload();
 
     });
 

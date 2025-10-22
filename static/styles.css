@@ -49,6 +49,8 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 
 /* ===== Course list ===== */
 .courses{columns:2;column-gap:18px}
+.course-actions{display:flex;justify-content:flex-end;margin:12px 0 0;}
+.course-actions button{padding:8px 12px;font-weight:700;}
 @media(min-width:640px){.courses{columns:3}}
 .chk{break-inside:avoid;display:block;margin:6px 0}
 
