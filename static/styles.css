@@ -120,21 +120,24 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 .vacation-card{
   margin: var(--cell-margin);
   border-radius: var(--card-radius);
-  padding: 10px;
-  background: rgba(63, 100, 180, 0.18);
-  border: 1px dashed rgba(125, 170, 255, 0.6);
-  color:#dce7ff;
+  padding: 12px 10px;
+  background: rgba(90, 130, 220, 0.22);
+  border: 1px dashed rgba(140, 180, 255, 0.7);
+  color:#e7eeff;
   display:flex;
   flex-direction:column;
-  gap:6px;
-  align-items:center;
-  justify-content:center;
-  text-align:center;
+  gap:8px;
+  align-items:flex-start;
+  justify-content:flex-start;
+  text-align:left;
   pointer-events:none;
+  box-shadow:0 8px 24px rgba(30, 60, 130, 0.25);
 }
 .vacation-card .vac-title{
   font-weight:800;
   letter-spacing:.4px;
+  text-transform:uppercase;
+  font-size:.85rem;
 }
 .vacation-card .vac-item{
   font-size:.9rem;

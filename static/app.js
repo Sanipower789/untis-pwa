@@ -2165,26 +2165,6 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
 
 
-  vacationByDay.forEach((dayVacations, day) => {
-    const vacCard = document.createElement("div");
-    vacCard.className = "vacation-card";
-    vacCard.style.gridColumn = String(day + 1);
-    vacCard.style.gridRow = `2 / -1`;
-    const entries = dayVacations.map(v => {
-      const range = v.start_date === v.end_date
-        ? formatDate(v.start_date)
-        : `${formatDate(v.start_date)} – ${formatDate(v.end_date)}`;
-      return `<div class="vac-item"><strong>${escapeHtml(v.title)}</strong><span>${range}</span></div>`;
-    }).join("");
-    vacCard.innerHTML = `
-      <div class="vac-title">Ferien</div>
-      ${entries}
-    `;
-    grid.appendChild(vacCard);
-  });
-
-
-
   // Place lessons (replace with Klausur if matching)
 
   valid.forEach(l => {
@@ -2486,6 +2466,44 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
     grid.appendChild(placeholder);
 
   }
+
+
+
+  vacationByDay.forEach((dayVacations, day) => {
+
+    const vacCard = document.createElement("div");
+
+    vacCard.className = "vacation-card";
+
+    vacCard.style.gridColumn = String(day + 1);
+
+    vacCard.style.gridRow = `2 / -1`;
+
+    vacCard.style.zIndex = "5";
+
+    const entries = dayVacations.map(v => {
+
+      const range = v.start_date === v.end_date
+
+        ? formatDate(v.start_date)
+
+        : `${formatDate(v.start_date)} – ${formatDate(v.end_date)}`;
+
+      return `<div class="vac-item"><strong>${escapeHtml(v.title)}</strong><span>${range}</span></div>`;
+
+    }).join("");
+
+    vacCard.innerHTML = `
+
+      <div class="vac-title">Ferien</div>
+
+      ${entries}
+
+    `;
+
+    grid.appendChild(vacCard);
+
+  });
 
 
 
