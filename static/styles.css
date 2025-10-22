@@ -117,6 +117,36 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 .lesson.klausur .lesson-title{display:flex;gap:6px;align-items:center}
 .lesson.klausur .lesson-title::before{content:"📝"}
 
+.vacation-card{
+  margin: var(--cell-margin);
+  border-radius: var(--card-radius);
+  padding: 10px;
+  background: rgba(63, 100, 180, 0.18);
+  border: 1px dashed rgba(125, 170, 255, 0.6);
+  color:#dce7ff;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  pointer-events:none;
+}
+.vacation-card .vac-title{
+  font-weight:800;
+  letter-spacing:.4px;
+}
+.vacation-card .vac-item{
+  font-size:.9rem;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+.vacation-card .vac-item span{
+  font-size:.8rem;
+  color:rgba(220,231,255,.7);
+}
+
 .lesson-title{
   font-weight:800;
   font-size: var(--font-title);

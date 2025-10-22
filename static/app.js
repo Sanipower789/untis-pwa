@@ -218,6 +218,55 @@ const formatPeriodRange = (start, end) => {
 
 };
 
+const VACATION_FETCH_TTL = 60 * 1000;
+let VACATIONS = [];
+let VACATIONS_FETCHED_AT = 0;
+
+function normaliseVacation(v){
+  if (!v || typeof v !== 'object') return null;
+  const out = {
+    id: Number.parseInt(v.id, 10) || null,
+    title: String(v.title || '').trim(),
+    start_date: String(v.start_date || '').trim(),
+    end_date: String(v.end_date || '').trim() || String(v.start_date || '').trim()
+  };
+  if (!out.title || !out.start_date) return null;
+  if (!out.end_date) out.end_date = out.start_date;
+  if (out.end_date < out.start_date){
+    const tmp = out.start_date; out.start_date = out.end_date; out.end_date = tmp;
+  }
+  return out;
+}
+
+async function loadVacations(force = false){
+  const now = Date.now();
+  if (!force && VACATIONS_FETCHED_AT && (now - VACATIONS_FETCHED_AT) < VACATION_FETCH_TTL){
+    return VACATIONS;
+  }
+  try {
+    const res = await fetch(`/api/vacations?ts=${now}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.statusText || 'vacations fetch failed');
+    const data = await res.json();
+    if (data && Array.isArray(data.vacations)){
+      VACATIONS = data.vacations.map(normaliseVacation).filter(Boolean);
+      VACATIONS.sort((a, b) => {
+        const dateDiff = (a.start_date || '').localeCompare(b.start_date || '');
+        if (dateDiff !== 0) return dateDiff;
+        return (a.title || '').localeCompare(b.title || '', 'de');
+      });
+      VACATIONS_FETCHED_AT = now;
+    }
+  } catch (err) {
+    console.warn('Vacations fetch failed:', err);
+  }
+  return VACATIONS;
+}
+
+function vacationsOnDate(iso){
+  if (!iso) return [];
+  return VACATIONS.filter(v => v.start_date <= iso && iso <= v.end_date);
+}
+
 
 
 /* Strong canonical normaliser (umlauts, (), dashes, tags, spaces) */
@@ -1899,6 +1948,20 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
   };
 
+  const isoByDay = {};
+
+  if (weekStartDate) {
+
+    for (let offset = 0; offset < 7; offset++) {
+
+      const current = new Date(weekStartDate.getTime() + offset * 24 * 3600 * 1000);
+
+      isoByDay[offset + 1] = current.toISOString().slice(0, 10);
+
+    }
+
+  }
+
 
 
   // MonFri only + collect time boundaries
@@ -1953,15 +2016,23 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
 
 
-  const daysWithLessons = new Set(valid.map(l => dayIdxISO(l.date)));
+  const activeDays = new Set(valid.map(l => dayIdxISO(l.date)));
 
   klausurenList.forEach(k => {
 
     const day = dayIdxISO(k.date);
 
-    if (day >= 1 && day <= 5) daysWithLessons.add(day);
+    if (day >= 1 && day <= 5) activeDays.add(day);
 
   });
+
+  for (let day = 1; day <= 5; day++) {
+
+    const iso = isoByDay[day];
+
+    if (iso && vacationsOnDate(iso).length) activeDays.add(day);
+
+  }
 
 
 
@@ -2043,7 +2114,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
     for (let d = 1; d <= 5; d++) {
 
-      if (!daysWithLessons.has(d)) continue;
+      if (!activeDays.has(d)) continue;
 
       const slot = document.createElement("div");
 
@@ -2070,6 +2141,45 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
     return Math.max(0, idx - 1);
 
   };
+
+
+
+  for (let day = 1; day <= 5; day++) {
+
+    const iso = isoByDay[day];
+
+    const dayVacations = iso ? vacationsOnDate(iso) : [];
+
+    if (!dayVacations.length) continue;
+
+    const vacCard = document.createElement("div");
+
+    vacCard.className = "vacation-card";
+
+    vacCard.style.gridColumn = String(day + 1);
+
+    vacCard.style.gridRow = `2 / -1`;
+
+    const entries = dayVacations.map(v => {
+
+      const range = v.start_date === v.end_date
+
+        ? formatDate(v.start_date)
+
+        : `${formatDate(v.start_date)} – ${formatDate(v.end_date)}`;
+
+      return `<div class="vac-item"><strong>${escapeHtml(v.title)}</strong><span>${range}</span></div>`;
+
+    }).join("");
+
+    vacCard.innerHTML = `
+      <div class="vac-title">Ferien</div>
+      ${entries}
+    `;
+
+    grid.appendChild(vacCard);
+
+  }
 
 
 
@@ -2259,8 +2369,6 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
   });
 
-
-
   klausurenList.forEach(k => {
 
     if (k.id && matchedKlausurIds.has(k.id)) return;
@@ -2351,7 +2459,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
   for (let d = 1; d <= 5; d++) {
 
-    if (daysWithLessons.has(d)) continue;
+    if (activeDays.has(d)) continue;
 
     const placeholder = document.createElement("div");
 
@@ -2398,6 +2506,8 @@ async function loadTimetable(force = false) {
   }
 
   try {
+
+    await loadVacations(force);
 
     await loadMappings();
 

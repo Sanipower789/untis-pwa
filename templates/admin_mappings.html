@@ -3,33 +3,48 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Mappings verwalten</title>
+  <title>Admin · Daten verwalten</title>
   <style>
-    :root{--bg:#0f0f10;--ink:#f2f3f5;--card:#16171b;--muted:#a7aab1;--line:#2b303a;--btn:#1976d2}
+    :root{
+      --bg:#0f0f10;--ink:#f2f3f5;--card:#16171b;--muted:#a7aab1;
+      --line:#2b303a;--btn:#1976d2;--danger:#c62828;
+    }
     *{box-sizing:border-box}
-    body{font-family:system-ui;background:var(--bg);color:var(--ink);margin:0}
+    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);margin:0}
     header{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#14151a;border-bottom:1px solid var(--line)}
-    .wrap{padding:14px 16px}
+    header .row{display:flex;gap:12px;align-items:center}
+    .wrap{padding:16px}
     .row{display:flex;gap:12px;flex-wrap:wrap}
-    .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;flex:1 1 460px;min-width:320px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;flex:1 1 420px;min-width:320px}
     h2{margin:.2rem 0 .8rem}
     table{width:100%;border-collapse:separate;border-spacing:0 6px}
     th,td{font-size:13px;vertical-align:top}
     th{color:var(--muted);text-align:left}
     td.key{color:#cdd0d6}
+    .muted{opacity:.6}
     .variants{font-size:12px;color:#98a0ab;margin-top:4px}
     input.map{width:100%;padding:8px;border-radius:8px;border:1px solid #3a3f4a;background:#1d1e23;color:#fff}
-    .bar{display:flex;gap:8px;margin:8px 0;align-items:center}
-    .pill{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:#cbd0d8}
-    .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+    .bar{display:flex;gap:8px;margin:8px 0;align-items:center;flex-wrap:wrap}
+    .pill{display:inline-flex;align-items:center;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:#cbd0d8;gap:6px}
+    .pill input{margin:0}
+    .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
     button{background:var(--btn);border:none;color:#fff;font-weight:700;border-radius:10px;padding:8px 12px;cursor:pointer}
+    button:disabled{opacity:.6;cursor:default}
+    button.danger{background:var(--danger)}
     .logout{background:#2b303a}
-    .muted{opacity:.6}
+    .vac-form{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px}
+    .vac-form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+    .vac-form input{background:#1d1e23;border:1px solid #3a3f4a;color:#fff;border-radius:8px;padding:6px 8px;min-width:120px}
+    .vac-legend{font-size:12px;color:var(--muted);margin-top:-6px;margin-bottom:8px}
+    td.actions{text-align:right}
+    td.actions button{padding:6px 10px;font-size:12px}
+    code{background:#1d1e23;padding:2px 6px;border-radius:6px;font-size:12px;color:#dfe1e6}
+    .empty-row td{text-align:center;color:var(--muted);font-size:12px;padding:10px 0}
   </style>
 </head>
 <body>
 <header>
-  <div>🔧 Mappings verwalten</div>
+  <div>🛠️ Admin · Daten verwalten</div>
   <div class="row">
     <a class="pill" href="/admin/logout">Logout</a>
   </div>
@@ -65,6 +80,52 @@
       <div class="foot"><button id="save-room">Speichern</button></div>
     </div>
   </div>
+
+  <div class="row">
+    <div class="card" id="users">
+      <h2>Benutzerkonten</h2>
+      <div class="bar">
+        <span class="pill" id="user-count"></span>
+      </div>
+      <table id="user-table">
+        <thead>
+          <tr>
+            <th>Benutzername</th>
+            <th>Erstellt</th>
+            <th style="text-align:right;">Aktion</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="vacations">
+      <h2>Ferien / Abwesenheiten</h2>
+      <form id="vacation-form" class="vac-form">
+        <label>Titel
+          <input type="text" id="vac-title" required placeholder="z. B. Winterferien">
+        </label>
+        <label>Von
+          <input type="date" id="vac-start" required>
+        </label>
+        <label>Bis
+          <input type="date" id="vac-end">
+        </label>
+        <button type="submit">Hinzufügen</button>
+      </form>
+      <div class="vac-legend">Hinweis: Ohne Enddatum wird automatisch das Startdatum verwendet.</div>
+      <table id="vacation-table">
+        <thead>
+          <tr>
+            <th>Bezeichnung</th>
+            <th>Zeitraum</th>
+            <th style="text-align:right;">Aktion</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -74,24 +135,31 @@ const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const state = {
   courses: {}, rooms: {},
   subjects_grouped: {}, rooms_grouped: {},
-  unmapped_subjects: [], unmapped_rooms: []
+  unmapped_subjects: [], unmapped_rooms: [],
+  users: [], vacations: []
+};
+
+const fmtDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("de-DE");
 };
 
 function rowHTML(nk, variants, currentValue, isMapped){
   return `
-    <tr class="${isMapped ? 'muted' : ''}">
+    <tr class="${isMapped ? "muted" : ""}">
       <td class="key">
-        <code>${nk || "—"}</code>
+        <code>${nk || "-"}</code>
         <div class="variants">${variants.map(v => `<span>${v}</span>`).join(", ")}</div>
       </td>
-      <td><input class="map" data-nk="${nk}" value="${(currentValue||"").replace(/"/g,"&quot;")}" placeholder="${isMapped? '(mapped)' : 'Anzeigename…'}"></td>
+      <td><input class="map" data-nk="${nk}" value="${(currentValue||"").replace(/"/g,"&quot;")}" placeholder="${isMapped ? "(gemappt)" : "Anzeigename"}"></td>
     </tr>
   `;
 }
 
 async function loadState(){
   const r = await fetch("/api/admin/state", {cache:"no-store"});
-  if (!r.ok){ alert("Unauthorized or Fehler."); location.href="/admin/login"; return; }
+  if (!r.ok){ alert("Nicht autorisiert."); location.href="/admin/login"; return; }
   const j = await r.json();
   if (!j.ok){ alert(j.error||"Fehler"); return; }
 
@@ -101,17 +169,21 @@ async function loadState(){
   state.rooms_grouped = j.rooms_grouped || {};
   state.unmapped_subjects = j.unmapped_subjects || [];
   state.unmapped_rooms = j.unmapped_rooms || [];
+  state.users = Array.isArray(j.users) ? j.users : [];
+  state.vacations = Array.isArray(j.vacations) ? j.vacations : [];
 
   $("#sub-count").textContent  = `${Object.keys(state.subjects_grouped).length} Schlüssel`;
   $("#room-count").textContent = `${Object.keys(state.rooms_grouped).length} Schlüssel`;
   $("#sub-unmapped").textContent  = `${state.unmapped_subjects.length} offen`;
   $("#room-unmapped").textContent = `${state.unmapped_rooms.length} offen`;
+  $("#user-count").textContent = `${state.users.length} Konten`;
 
   renderTables();
+  renderUsers();
+  renderVacations();
 }
 
 function renderTables(){
-  // subjects
   const onlyOpenSub = $("#only-unmapped-sub").checked;
   const subTB = $("#sub-table tbody");
   subTB.innerHTML = "";
@@ -123,8 +195,8 @@ function renderTables(){
       rowHTML(nk, state.subjects_grouped[nk], state.courses[nk] || "", isMapped)
     );
   });
+  if (!subTB.children.length) subTB.innerHTML = `<tr class="empty-row"><td colspan="2">Alles erledigt 🎉</td></tr>`;
 
-  // rooms
   const onlyOpenRm = $("#only-unmapped-room").checked;
   const rmTB = $("#room-table tbody");
   rmTB.innerHTML = "";
@@ -136,13 +208,53 @@ function renderTables(){
       rowHTML(nk, state.rooms_grouped[nk], state.rooms[nk] || "", isMapped)
     );
   });
+  if (!rmTB.children.length) rmTB.innerHTML = `<tr class="empty-row"><td colspan="2">Alles erledigt 🎉</td></tr>`;
+}
+
+function renderUsers(){
+  const tbody = $("#user-table tbody");
+  tbody.innerHTML = "";
+  if (!state.users.length){
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">Noch keine Benutzer angelegt.</td></tr>`;
+    return;
+  }
+  state.users.forEach(user => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${user.username}</td>
+      <td>${user.created_at || "—"}</td>
+      <td class="actions"><button class="danger" data-user="${user.id}">Löschen</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderVacations(){
+  const tbody = $("#vacation-table tbody");
+  tbody.innerHTML = "";
+  if (!state.vacations.length){
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">Keine Ferien hinterlegt.</td></tr>`;
+    return;
+  }
+  state.vacations.forEach(v => {
+    const tr = document.createElement("tr");
+    const range = v.start_date === v.end_date
+      ? fmtDate(v.start_date)
+      : `${fmtDate(v.start_date)} – ${fmtDate(v.end_date)}`;
+    tr.innerHTML = `
+      <td>${v.title}</td>
+      <td>${range}</td>
+      <td class="actions"><button class="danger" data-vac="${v.id}">Löschen</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
 }
 
 async function save(kind){
   const tableId = kind === "courses" ? "sub-table" : "room-table";
   const inputs = $$("#"+tableId+" input.map");
   const out = {};
-  for (const inp of inputs) out[inp.dataset.nk] = inp.value; // empty allowed
+  for (const inp of inputs) out[inp.dataset.nk] = inp.value;
   const r = await fetch("/api/admin/save", {
     method: "POST",
     headers: {"content-type":"application/json"},
@@ -157,6 +269,78 @@ $("#save-sub").onclick = () => save("courses");
 $("#save-room").onclick = () => save("rooms");
 $("#only-unmapped-sub").onchange = renderTables;
 $("#only-unmapped-room").onchange = renderTables;
+
+$("#user-table").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button[data-user]");
+  if (!btn) return;
+  const userId = Number.parseInt(btn.dataset.user, 10);
+  if (!Number.isFinite(userId)) return;
+  const username = btn.closest("tr")?.children[0]?.textContent?.trim() || "";
+  if (!confirm(`Benutzer „${username || userId}“ wirklich löschen?`)) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/admin/users/${userId}`, { method: "DELETE" });
+    const j = await res.json().catch(()=>({}));
+    if (!res.ok || !j.ok) alert(j.error || "Löschen fehlgeschlagen.");
+    else loadState();
+  } catch {
+    alert("Netzwerkfehler beim Löschen.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#vacation-table").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button[data-vac]");
+  if (!btn) return;
+  const vacId = Number.parseInt(btn.dataset.vac, 10);
+  if (!Number.isFinite(vacId)) return;
+  const name = btn.closest("tr")?.children[0]?.textContent?.trim() || "";
+  if (!confirm(`Ferien „${name || vacId}“ wirklich löschen?`)) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/admin/vacations/${vacId}`, { method: "DELETE" });
+    const j = await res.json().catch(()=>({}));
+    if (!res.ok || !j.ok) alert(j.error || "Löschen fehlgeschlagen.");
+    else loadState();
+  } catch {
+    alert("Netzwerkfehler beim Löschen.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+const vacForm = $("#vacation-form");
+vacForm?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const title = $("#vac-title").value.trim();
+  const start = $("#vac-start").value;
+  const end = $("#vac-end").value;
+  if (!title || !start){
+    alert("Bitte Titel und Startdatum angeben.");
+    return;
+  }
+  const btn = vacForm.querySelector("button[type='submit']");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/admin/vacations", {
+      method: "POST",
+      headers: {"content-type":"application/json"},
+      body: JSON.stringify({ title, start_date: start, end_date: end })
+    });
+    const j = await res.json().catch(()=>({}));
+    if (!res.ok || !j.ok){
+      alert(j.error || "Speichern fehlgeschlagen.");
+    } else {
+      vacForm.reset();
+      loadState();
+    }
+  } catch {
+    alert("Netzwerkfehler beim Speichern.");
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 loadState();
 </script>

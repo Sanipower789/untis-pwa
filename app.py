@@ -63,6 +63,17 @@ def init_db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vacations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -168,6 +179,9 @@ def _save_profile(user_id, profile):
         (json.dumps(_normalise_profile(profile)), user_id)
     )
     db.commit()
+
+def _parse_iso_date(value: str) -> date:
+    return datetime.strptime(value, "%Y-%m-%d").date()
 
 # ---------- Normalisation (canonical across app) ----------
 _UML = str.maketrans({"ä":"a","ö":"o","ü":"u","Ä":"a","Ö":"o","Ü":"u"})
@@ -388,6 +402,23 @@ def api_timetable():
     _last_weekkey_ts[weekkey] = time.time()
     return _no_store(jsonify(payload))
 
+@app.route("/api/vacations")
+def api_vacations():
+    db = get_db()
+    cur = db.execute(
+        "SELECT id, title, start_date, end_date FROM vacations ORDER BY start_date, title"
+    )
+    rows = [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "start_date": row["start_date"],
+            "end_date": row["end_date"],
+        }
+        for row in cur.fetchall()
+    ]
+    return _no_store(jsonify({"ok": True, "vacations": rows}))
+
 def _auth_response(row):
     profile = _load_profile_for_user(row) if row else _empty_profile()
     return {
@@ -505,6 +536,40 @@ def admin_state():
     unmapped_sub = [nk for nk in sorted(groups_sub.keys()) if nk not in courses]
     unmapped_rm  = [nk for nk in sorted(groups_rm.keys())  if nk not in rooms]
 
+    user_rows = []
+    try:
+        cur = get_db().execute(
+            "SELECT id, username, created_at FROM users ORDER BY LOWER(username)"
+        )
+        user_rows = [
+            {
+                "id": row["id"],
+                "username": row["username"],
+                "created_at": row["created_at"],
+            }
+            for row in cur.fetchall()
+        ]
+    except sqlite3.Error:
+        user_rows = []
+
+    vacations = []
+    try:
+        cur = get_db().execute(
+            "SELECT id, title, start_date, end_date, created_at FROM vacations ORDER BY start_date, title"
+        )
+        vacations = [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "start_date": row["start_date"],
+                "end_date": row["end_date"],
+                "created_at": row["created_at"],
+            }
+            for row in cur.fetchall()
+        ]
+    except sqlite3.Error:
+        vacations = []
+
     return _no_store(jsonify({
         "ok": True,
         "courses": courses,                # { norm_key: display }
@@ -512,7 +577,9 @@ def admin_state():
         "subjects_grouped": groups_sub,    # { norm_key: [raw variants…] }
         "rooms_grouped": groups_rm,        # { norm_key: [raw variants…] }
         "unmapped_subjects": unmapped_sub,
-        "unmapped_rooms": unmapped_rm
+        "unmapped_rooms": unmapped_rm,
+        "users": user_rows,
+        "vacations": vacations
     }))
 
 @app.route("/api/admin/save", methods=["POST"])
@@ -538,6 +605,71 @@ def admin_save():
     _write_mapping_txt(ROOM_MAP_PATH, rooms)
 
     return _no_store(jsonify({"ok": True, "saved_courses": len(new_courses), "saved_rooms": len(new_rooms)}))
+
+@app.route("/api/admin/vacations", methods=["GET", "POST"])
+def admin_vacations():
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    db = get_db()
+    if request.method == "GET":
+        cur = db.execute(
+            "SELECT id, title, start_date, end_date, created_at FROM vacations ORDER BY start_date, title"
+        )
+        rows = [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "start_date": row["start_date"],
+                "end_date": row["end_date"],
+                "created_at": row["created_at"],
+            }
+            for row in cur.fetchall()
+        ]
+        return _no_store(jsonify({"ok": True, "vacations": rows}))
+
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip()
+    start_raw = (data.get("start_date") or "").strip()
+    end_raw = (data.get("end_date") or "").strip() or start_raw
+    if not title or not start_raw or not end_raw:
+        return jsonify({"ok": False, "error": "invalid_input"}), 400
+    try:
+        start = _parse_iso_date(start_raw)
+        end = _parse_iso_date(end_raw)
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid_date"}), 400
+    if end < start:
+        start, end = end, start
+    db.execute(
+        "INSERT INTO vacations (title, start_date, end_date) VALUES (?, ?, ?)",
+        (title, start.isoformat(), end.isoformat())
+    )
+    db.commit()
+    return _no_store(jsonify({"ok": True}))
+
+@app.route("/api/admin/users/<int:user_id>", methods=["DELETE"])
+def admin_delete_user(user_id: int):
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    db = get_db()
+    cur = db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    db.commit()
+    if cur.rowcount == 0:
+        return _no_store(jsonify({"ok": False, "error": "not_found"})), 404
+    return _no_store(jsonify({"ok": True, "deleted": user_id}))
+
+@app.route("/api/admin/vacations/<int:vac_id>", methods=["DELETE"])
+def admin_delete_vacation(vac_id: int):
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    db = get_db()
+    cur = db.execute("DELETE FROM vacations WHERE id = ?", (vac_id,))
+    db.commit()
+    if cur.rowcount == 0:
+        return _no_store(jsonify({"ok": False, "error": "not_found"})), 404
+    return _no_store(jsonify({"ok": True, "deleted": vac_id}))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
