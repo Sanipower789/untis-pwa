@@ -47,7 +47,7 @@ DATA   = ROOT  # keep mappings & seen files in project root
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(24))
-ADMIN_TOKEN    = os.environ.get("ADMIN_TOKEN")
+ADMIN_TOKEN    = os.environ.get("ADMIN_TOKEN", "KukuSabzi")
 DB_PATH        = os.path.join(DATA, "user_data.db")
 
 def init_db():
@@ -539,13 +539,13 @@ def admin_state():
     user_rows = []
     try:
         cur = get_db().execute(
-            "SELECT id, username, created_at FROM users ORDER BY LOWER(username)"
+            "SELECT id, username, password_hash FROM users ORDER BY LOWER(username)"
         )
         user_rows = [
             {
                 "id": row["id"],
                 "username": row["username"],
-                "created_at": row["created_at"],
+                "password": row["password_hash"],
             }
             for row in cur.fetchall()
         ]

@@ -2017,7 +2017,16 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
 
   const activeDays = new Set(valid.map(l => dayIdxISO(l.date)));
-
+  const vacationByDay = new Map();
+  for (let day = 1; day <= 5; day++) {
+    const iso = isoByDay[day];
+    if (!iso) continue;
+    const list = vacationsOnDate(iso);
+    if (list.length) {
+      activeDays.add(day);
+      vacationByDay.set(day, list);
+    }
+  }
   klausurenList.forEach(k => {
 
     const day = dayIdxISO(k.date);
@@ -2144,42 +2153,23 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null) {
 
 
 
-  for (let day = 1; day <= 5; day++) {
-
-    const iso = isoByDay[day];
-
-    const dayVacations = iso ? vacationsOnDate(iso) : [];
-
-    if (!dayVacations.length) continue;
-
+  vacationByDay.forEach((dayVacations, day) => {
     const vacCard = document.createElement("div");
-
     vacCard.className = "vacation-card";
-
     vacCard.style.gridColumn = String(day + 1);
-
     vacCard.style.gridRow = `2 / -1`;
-
     const entries = dayVacations.map(v => {
-
       const range = v.start_date === v.end_date
-
         ? formatDate(v.start_date)
-
         : `${formatDate(v.start_date)} – ${formatDate(v.end_date)}`;
-
       return `<div class="vac-item"><strong>${escapeHtml(v.title)}</strong><span>${range}</span></div>`;
-
     }).join("");
-
     vacCard.innerHTML = `
       <div class="vac-title">Ferien</div>
       ${entries}
     `;
-
     grid.appendChild(vacCard);
-
-  }
+  });
 
 
 
