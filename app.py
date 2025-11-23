@@ -1,4 +1,7 @@
 import os, json, time, re, sqlite3
+from typing import Optional, Any
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 from flask import (
@@ -48,57 +51,127 @@ DATA   = ROOT  # keep mappings & seen files in project root
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(24))
 ADMIN_TOKEN    = os.environ.get("ADMIN_TOKEN", "KukuSabzi")
-DB_PATH        = os.path.join(DATA, "user_data.db")
+DB_URL         = os.environ.get("DB_URL")
+DB_PATH        = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
+USE_PG         = bool(DB_URL)
+
+def _pg_dsn() -> Optional[str]:
+    if not DB_URL:
+        return None
+    if "sslmode" in DB_URL:
+        return DB_URL
+    return DB_URL + ("&" if "?" in DB_URL else "?") + "sslmode=require"
+
+def _ensure_db_path() -> None:
+    """Make sure DB directory exists and is writable (SQLite only)."""
+    if USE_PG:
+        return
+    db_dir = os.path.dirname(DB_PATH) or "."
+    try:
+        os.makedirs(db_dir, exist_ok=True)
+        test_path = os.path.join(db_dir, ".db_write_test")
+        with open(test_path, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(test_path)
+    except Exception as exc:
+        raise RuntimeError(f"Database path not writable: {DB_PATH} ({exc})")
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL COLLATE NOCASE UNIQUE,
-            password_hash TEXT NOT NULL,
-            password_plain TEXT,
-            profile_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    if USE_PG:
+        conn = psycopg2.connect(_pg_dsn(), cursor_factory=RealDictCursor)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                password_plain TEXT,
+                profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
         )
-        """
-    )
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN password_plain TEXT")
-    except sqlite3.OperationalError:
-        pass
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vacations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            start_date TEXT NOT NULL,
-            end_date TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vacations (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
         )
-        """
-    )
-    for key, value in SETTINGS_DEFAULTS.items():
+        for key, value in SETTINGS_DEFAULTS.items():
+            cur.execute(
+                "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
+                (key, value)
+            )
+        conn.commit()
+        conn.close()
+    else:
+        _ensure_db_path()
+        conn = sqlite3.connect(DB_PATH)
         conn.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-            (key, value)
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                password_hash TEXT NOT NULL,
+                password_plain TEXT,
+                profile_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
         )
-    conn.commit()
-    conn.close()
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN password_plain TEXT")
+        except sqlite3.OperationalError:
+            pass
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vacations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        for key, value in SETTINGS_DEFAULTS.items():
+            conn.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+                (key, value)
+            )
+        conn.commit()
+        conn.close()
 
 def get_db():
     if "db" not in g:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
+        if USE_PG:
+            conn = psycopg2.connect(_pg_dsn(), cursor_factory=RealDictCursor)
+        else:
+            _ensure_db_path()
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
         g.db = conn
     return g.db
 
@@ -221,10 +294,17 @@ def _set_settings(values):
 
 def _save_profile(user_id, profile):
     db = get_db()
-    db.execute(
-        "UPDATE users SET profile_json = ? WHERE id = ?",
-        (json.dumps(_normalise_profile(profile)), user_id)
-    )
+    norm = json.dumps(_normalise_profile(profile))
+    if USE_PG:
+        db.execute(
+            "UPDATE users SET profile_json = %s WHERE id = %s",
+            (norm, user_id)
+        )
+    else:
+        db.execute(
+            "UPDATE users SET profile_json = ? WHERE id = ?",
+            (norm, user_id)
+        )
     db.commit()
 
 def _parse_iso_date(value: str) -> date:
@@ -418,6 +498,14 @@ def api_timetable():
     if not force and weekkey in _last_weekkey_payload and (now_ts - _last_weekkey_ts.get(weekkey, 0)) < 15:
         return _no_store(jsonify(_last_weekkey_payload[weekkey]))
 
+    raw_width = _get_setting("timeColumnWidth", SETTINGS_DEFAULTS["timeColumnWidth"])
+    try:
+        width_value = int(float(raw_width))
+    except (TypeError, ValueError):
+        width_value = int(SETTINGS_DEFAULTS["timeColumnWidth"])
+    width_value = max(40, min(120, width_value))
+    settings_payload = {"timeColumnWidth": width_value}
+
     try:
         lessons = fetch_week(ws)  # your Untis client returns raw lessons
     except Exception as e:
@@ -443,14 +531,6 @@ def api_timetable():
                 "room_raw": rr,    "room_norm": rn,    "mapped_room": rmap.get(rn),
                 "server_now": datetime.now(APP_TZ).isoformat(), "week_start": ws.isoformat()
             }
-
-    raw_width = _get_setting("timeColumnWidth", SETTINGS_DEFAULTS["timeColumnWidth"])
-    try:
-        width_value = int(float(raw_width))
-    except (TypeError, ValueError):
-        width_value = int(SETTINGS_DEFAULTS["timeColumnWidth"])
-    width_value = max(40, min(120, width_value))
-    settings_payload = {"timeColumnWidth": width_value}
 
     payload = {"ok": True, "weekStart": str(ws), "lessons": lessons, "settings": settings_payload}
     _last_weekkey_payload[weekkey] = payload
@@ -498,15 +578,26 @@ def api_auth_register():
         return jsonify({"ok": False, "error": "invalid_input"}), 400
     db = get_db()
     try:
-        cur = db.execute(
-            "INSERT INTO users (username, password_hash, password_plain, profile_json) VALUES (?, ?, ?, ?)",
-            (username, generate_password_hash(password), password, json.dumps(_empty_profile()))
-        )
+        if USE_PG:
+            cur = db.execute(
+                "INSERT INTO users (username, password_hash, password_plain, profile_json) VALUES (%s, %s, %s, %s) RETURNING id",
+                (username, generate_password_hash(password), password, json.dumps(_empty_profile()))
+            )
+            new_id = cur.fetchone()["id"]
+        else:
+            cur = db.execute(
+                "INSERT INTO users (username, password_hash, password_plain, profile_json) VALUES (?, ?, ?, ?)",
+                (username, generate_password_hash(password), password, json.dumps(_empty_profile()))
+            )
+            new_id = cur.lastrowid
         db.commit()
     except sqlite3.IntegrityError:
         return jsonify({"ok": False, "error": "username_exists"}), 409
-    session["user_id"] = cur.lastrowid
-    row = _load_user(cur.lastrowid)
+    except psycopg2.IntegrityError:
+        db.rollback()
+        return jsonify({"ok": False, "error": "username_exists"}), 409
+    session["user_id"] = new_id
+    row = _load_user(new_id)
     return _no_store(jsonify(_auth_response(row))), 201
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -518,10 +609,12 @@ def api_auth_login():
         return jsonify({"ok": False, "error": "invalid_input"}), 400
     row = None
     if username:
-        row = get_db().execute(
+        cur = get_db().execute(
+            "SELECT id, username, password_hash, profile_json FROM users WHERE username = %s" if USE_PG else
             "SELECT id, username, password_hash, profile_json FROM users WHERE username = ?",
             (username,)
-        ).fetchone()
+        )
+        row = cur.fetchone()
     if not row or not check_password_hash(row["password_hash"], password):
         return jsonify({"ok": False, "error": "invalid_credentials"}), 401
     session["user_id"] = row["id"]
@@ -594,17 +687,22 @@ def admin_state():
     user_rows = []
     try:
         cur = get_db().execute(
+            "SELECT id, username, password_plain, password_hash FROM users ORDER BY LOWER(username)" if not USE_PG else
             "SELECT id, username, password_plain, password_hash FROM users ORDER BY LOWER(username)"
         )
-        user_rows = [
-            {
-                "id": row["id"],
-                "username": row["username"],
-                "password": row["password_plain"] or row["password_hash"],
-            }
-            for row in cur.fetchall()
-        ]
-    except sqlite3.Error:
+        rows = cur.fetchall()
+        user_rows = []
+        for row in rows:
+            username = row["username"] if isinstance(row, dict) else row[1]
+            pwd_plain = row["password_plain"] if isinstance(row, dict) else row[2]
+            pwd_hash = row["password_hash"] if isinstance(row, dict) else row[3]
+            uid = row["id"] if isinstance(row, dict) else row[0]
+            user_rows.append({
+                "id": uid,
+                "username": username,
+                "password": pwd_plain or pwd_hash,
+            })
+    except Exception:
         user_rows = []
 
     vacations = []
@@ -612,17 +710,17 @@ def admin_state():
         cur = get_db().execute(
             "SELECT id, title, start_date, end_date, created_at FROM vacations ORDER BY start_date, title"
         )
-        vacations = [
-            {
-                "id": row["id"],
-                "title": row["title"],
-                "start_date": row["start_date"],
-                "end_date": row["end_date"],
-                "created_at": row["created_at"],
-            }
-            for row in cur.fetchall()
-        ]
-    except sqlite3.Error:
+        rows = cur.fetchall()
+        vacations = []
+        for row in rows:
+            vacations.append({
+                "id": row["id"] if isinstance(row, dict) else row[0],
+                "title": row["title"] if isinstance(row, dict) else row[1],
+                "start_date": row["start_date"] if isinstance(row, dict) else row[2],
+                "end_date": row["end_date"] if isinstance(row, dict) else row[3],
+                "created_at": row["created_at"] if isinstance(row, dict) else row[4],
+            })
+    except Exception:
         vacations = []
 
     settings_payload = {key: _get_setting(key, default) for key, default in SETTINGS_DEFAULTS.items()}
@@ -648,6 +746,7 @@ def admin_save():
     payload = request.get_json(silent=True) or {}
     new_courses: dict = payload.get("courses") or {}
     new_rooms: dict   = payload.get("rooms") or {}
+    new_settings: dict = payload.get("settings") or {}
     new_settings: dict = payload.get("settings") or {}
 
     # load current
@@ -708,10 +807,16 @@ def admin_vacations():
         return jsonify({"ok": False, "error": "invalid_date"}), 400
     if end < start:
         start, end = end, start
-    db.execute(
-        "INSERT INTO vacations (title, start_date, end_date) VALUES (?, ?, ?)",
-        (title, start.isoformat(), end.isoformat())
-    )
+    if USE_PG:
+        db.execute(
+            "INSERT INTO vacations (title, start_date, end_date) VALUES (%s, %s, %s)",
+            (title, start.isoformat(), end.isoformat())
+        )
+    else:
+        db.execute(
+            "INSERT INTO vacations (title, start_date, end_date) VALUES (?, ?, ?)",
+            (title, start.isoformat(), end.isoformat())
+        )
     db.commit()
     return _no_store(jsonify({"ok": True}))
 
@@ -732,7 +837,8 @@ def admin_delete_vacation(vac_id: int):
     if not _require_admin():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     db = get_db()
-    cur = db.execute("DELETE FROM vacations WHERE id = ?", (vac_id,))
+    sql = "DELETE FROM vacations WHERE id = %s" if USE_PG else "DELETE FROM vacations WHERE id = ?"
+    cur = db.execute(sql, (vac_id,))
     db.commit()
     if cur.rowcount == 0:
         return _no_store(jsonify({"ok": False, "error": "not_found"})), 404
