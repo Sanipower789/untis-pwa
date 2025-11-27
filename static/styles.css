@@ -125,7 +125,7 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   margin: var(--cell-margin);
   border-radius: var(--card-radius);
   padding: 12px 10px;
-  background: transparent;
+  background: rgba(16, 30, 60, 0.9);
   border: 1px dashed rgba(140, 180, 255, 0.7);
   color:#e7eeff;
   display:flex;
