@@ -1156,7 +1156,7 @@ const Auth = (() => {
 
     document.body.style.overflow = "hidden";
 
-    const target = state.loggedIn ? "account" : (view || currentView || "login");
+    const target = state.loggedIn ? "account" : (view || "register");
 
     showView(target);
 
@@ -1662,6 +1662,10 @@ const Auth = (() => {
       initDone = true;
 
       setButtonLabel();
+      // Default to register view for first open when logged out
+      if (!state.loggedIn) {
+        showView("register");
+      }
 
       if (authButton) {
 
