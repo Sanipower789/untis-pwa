@@ -119,16 +119,6 @@
         <button type="button" data-view="login" class="auth-tab">Einloggen</button>
         <button type="button" data-view="register" class="auth-tab active">Registrieren</button>
       </div>
-      <form id="login-form" class="auth-form" style="display:none;">
-        <label>Benutzername
-          <input type="text" name="username" autocomplete="username" required>
-        </label>
-        <label>Passwort
-          <input type="password" name="password" autocomplete="current-password" required>
-        </label>
-        <button type="submit" class="primary">Einloggen</button>
-        <p class="auth-error muted" role="alert"></p>
-      </form>
       <form id="register-form" class="auth-form">
         <label>Benutzername
           <input type="text" name="username" autocomplete="username" required>
@@ -138,6 +128,16 @@
         </label>
         <p class="muted small">Nur du kennst dein Passwort – merke es dir gut.</p>
         <button type="submit" class="primary">Registrieren</button>
+        <p class="auth-error muted" role="alert"></p>
+      </form>
+      <form id="login-form" class="auth-form" style="display:none;">
+        <label>Benutzername
+          <input type="text" name="username" autocomplete="username" required>
+        </label>
+        <label>Passwort
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="primary">Einloggen</button>
         <p class="auth-error muted" role="alert"></p>
       </form>
       <div id="account-view" class="auth-account" style="display:none;">
