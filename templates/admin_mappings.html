@@ -140,6 +140,18 @@
     </div>
   </div>
 
+  <div class="row">
+    <div class="card" id="backup">
+      <h2>Backup</h2>
+      <div class="bar">
+        <button id="backup-download">Backup herunterladen</button>
+        <input type="file" id="backup-file" accept="application/json">
+        <button id="backup-upload">Backup einspielen</button>
+      </div>
+      <div id="backup-status" class="muted"></div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -404,6 +416,76 @@ if (saveSettingsBtn) {
     }
   };
 }
+
+const backupFileInput = document.getElementById("backup-file");
+const backupDownloadBtn = document.getElementById("backup-download");
+const backupUploadBtn = document.getElementById("backup-upload");
+const backupStatus = document.getElementById("backup-status");
+const setBackupStatus = (msg) => { if (backupStatus) backupStatus.textContent = msg || ""; };
+
+backupDownloadBtn?.addEventListener("click", async () => {
+  backupDownloadBtn.disabled = true;
+  setBackupStatus("Backup wird erstellt...");
+  try {
+    const res = await fetch("/api/admin/backup", { cache: "no-store" });
+    if (!res.ok) throw new Error("Download fehlgeschlagen.");
+    const blob = await res.blob();
+    const name = `untis-backup-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setBackupStatus("Backup gespeichert.");
+  } catch (err) {
+    alert(err?.message || "Backup-Download fehlgeschlagen.");
+    setBackupStatus("Backup-Download fehlgeschlagen.");
+  } finally {
+    backupDownloadBtn.disabled = false;
+  }
+});
+
+backupUploadBtn?.addEventListener("click", async () => {
+  const file = backupFileInput?.files?.[0];
+  if (!file){
+    alert("Bitte eine Backup-Datei auswaehlen.");
+    return;
+  }
+  let parsed;
+  try {
+    const text = await file.text();
+    parsed = JSON.parse(text);
+  } catch {
+    alert("Die Datei ist kein gueltiges JSON.");
+    return;
+  }
+  if (!confirm("Alle vorhandenen Daten werden ersetzt. Fortfahren?")) return;
+  backupUploadBtn.disabled = true;
+  setBackupStatus("Backup wird eingespielt...");
+  try {
+    const res = await fetch("/api/admin/restore", {
+      method: "POST",
+      headers: {"content-type":"application/json"},
+      body: JSON.stringify(parsed)
+    });
+    const j = await res.json().catch(()=>({}));
+    if (!res.ok || !j.ok){
+      throw new Error(j.error || "Import fehlgeschlagen.");
+    }
+    setBackupStatus("Backup importiert.");
+    if (backupFileInput) backupFileInput.value = "";
+    loadState();
+  } catch (err) {
+    alert(err?.message || "Backup-Import fehlgeschlagen.");
+    setBackupStatus("Backup-Import fehlgeschlagen.");
+  } finally {
+    backupUploadBtn.disabled = false;
+  }
+});
 
 loadState();
 </script>

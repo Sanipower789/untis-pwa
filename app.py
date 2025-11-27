@@ -1,16 +1,10 @@
 import os, json, time, re, sqlite3
-from typing import Optional, Any
-import psycopg2
-from psycopg2.extras import RealDictCursor
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 from flask import (
-    Flask, jsonify, render_template, request,
+    Flask, jsonify, make_response, render_template, request,
     redirect, url_for, session, g
 )
-
-import time, json, os, traceback
-from flask import jsonify, make_response
 from werkzeug.security import generate_password_hash, check_password_hash
 
 LAST_GOOD_PATH = "last_good_timetable.json"
@@ -50,22 +44,13 @@ DATA   = ROOT  # keep mappings & seen files in project root
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(24))
-ADMIN_TOKEN    = os.environ.get("ADMIN_TOKEN", "KukuSabzi")
-DB_URL         = os.environ.get("DB_URL")
-DB_PATH        = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
-USE_PG         = bool(DB_URL)
-
-def _pg_dsn() -> Optional[str]:
-    if not DB_URL:
-        return None
-    if "sslmode" in DB_URL:
-        return DB_URL
-    return DB_URL + ("&" if "?" in DB_URL else "?") + "sslmode=require"
+ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN", "KukuSabzi")
+DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
+SETTINGS_DEFAULTS  = {"timeColumnWidth": "60"}
+BACKUP_VERSION     = 1
 
 def _ensure_db_path() -> None:
     """Make sure DB directory exists and is writable (SQLite only)."""
-    if USE_PG:
-        return
     db_dir = os.path.dirname(DB_PATH) or "."
     try:
         os.makedirs(db_dir, exist_ok=True)
@@ -77,101 +62,56 @@ def _ensure_db_path() -> None:
         raise RuntimeError(f"Database path not writable: {DB_PATH} ({exc})")
 
 def init_db():
-    if USE_PG:
-        conn = psycopg2.connect(_pg_dsn(), cursor_factory=RealDictCursor)
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                password_plain TEXT,
-                profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
+    _ensure_db_path()
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+            password_hash TEXT NOT NULL,
+            password_plain TEXT,
+            profile_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vacations (
-                id SERIAL PRIMARY KEY,
-                title TEXT NOT NULL,
-                start_date DATE NOT NULL,
-                end_date DATE NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
+        """
+    )
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN password_plain TEXT")
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vacations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         )
-        for key, value in SETTINGS_DEFAULTS.items():
-            cur.execute(
-                "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
-                (key, value)
-            )
-        conn.commit()
-        conn.close()
-    else:
-        _ensure_db_path()
-        conn = sqlite3.connect(DB_PATH)
+        """
+    )
+    for key, value in SETTINGS_DEFAULTS.items():
         conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL COLLATE NOCASE UNIQUE,
-                password_hash TEXT NOT NULL,
-                password_plain TEXT,
-                profile_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
         )
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN password_plain TEXT")
-        except sqlite3.OperationalError:
-            pass
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vacations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                start_date TEXT NOT NULL,
-                end_date TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-        for key, value in SETTINGS_DEFAULTS.items():
-            conn.execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-                (key, value)
-            )
-        conn.commit()
-        conn.close()
+    conn.commit()
+    conn.close()
 
 def get_db():
     if "db" not in g:
-        if USE_PG:
-            conn = psycopg2.connect(_pg_dsn(), cursor_factory=RealDictCursor)
-        else:
-            _ensure_db_path()
-            conn = sqlite3.connect(DB_PATH)
-            conn.row_factory = sqlite3.Row
+        _ensure_db_path()
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         g.db = conn
     return g.db
 
@@ -295,16 +235,10 @@ def _set_settings(values):
 def _save_profile(user_id, profile):
     db = get_db()
     norm = json.dumps(_normalise_profile(profile))
-    if USE_PG:
-        db.execute(
-            "UPDATE users SET profile_json = %s WHERE id = %s",
-            (norm, user_id)
-        )
-    else:
-        db.execute(
-            "UPDATE users SET profile_json = ? WHERE id = ?",
-            (norm, user_id)
-        )
+    db.execute(
+        "UPDATE users SET profile_json = ? WHERE id = ?",
+        (norm, user_id)
+    )
     db.commit()
 
 def _parse_iso_date(value: str) -> date:
@@ -578,23 +512,13 @@ def api_auth_register():
         return jsonify({"ok": False, "error": "invalid_input"}), 400
     db = get_db()
     try:
-        if USE_PG:
-            cur = db.execute(
-                "INSERT INTO users (username, password_hash, password_plain, profile_json) VALUES (%s, %s, %s, %s) RETURNING id",
-                (username, generate_password_hash(password), password, json.dumps(_empty_profile()))
-            )
-            new_id = cur.fetchone()["id"]
-        else:
-            cur = db.execute(
-                "INSERT INTO users (username, password_hash, password_plain, profile_json) VALUES (?, ?, ?, ?)",
-                (username, generate_password_hash(password), password, json.dumps(_empty_profile()))
-            )
-            new_id = cur.lastrowid
+        cur = db.execute(
+            "INSERT INTO users (username, password_hash, password_plain, profile_json) VALUES (?, ?, ?, ?)",
+            (username, generate_password_hash(password), password, json.dumps(_empty_profile()))
+        )
+        new_id = cur.lastrowid
         db.commit()
     except sqlite3.IntegrityError:
-        return jsonify({"ok": False, "error": "username_exists"}), 409
-    except psycopg2.IntegrityError:
-        db.rollback()
         return jsonify({"ok": False, "error": "username_exists"}), 409
     session["user_id"] = new_id
     row = _load_user(new_id)
@@ -610,7 +534,6 @@ def api_auth_login():
     row = None
     if username:
         cur = get_db().execute(
-            "SELECT id, username, password_hash, profile_json FROM users WHERE username = %s" if USE_PG else
             "SELECT id, username, password_hash, profile_json FROM users WHERE username = ?",
             (username,)
         )
@@ -670,6 +593,200 @@ def admin_mappings():
     return render_template("admin_mappings.html")
 
 # ---- Admin APIs ----
+def _build_backup_payload() -> dict:
+    """Collect all editable data so admins can download a single backup file."""
+    db = get_db()
+    users = []
+    try:
+        cur = db.execute(
+            "SELECT id, username, password_hash, password_plain, profile_json, created_at FROM users ORDER BY id"
+        )
+        for row in cur.fetchall():
+            users.append({
+                "id": row["id"],
+                "username": row["username"],
+                "password_hash": row["password_hash"],
+                "password_plain": row["password_plain"],
+                "profile": _load_profile_for_user(row),
+                "created_at": row["created_at"],
+            })
+    except Exception:
+        users = []
+
+    vacations = []
+    try:
+        cur = db.execute(
+            "SELECT id, title, start_date, end_date, created_at FROM vacations ORDER BY start_date, id"
+        )
+        for row in cur.fetchall():
+            vacations.append({
+                "id": row["id"],
+                "title": row["title"],
+                "start_date": row["start_date"],
+                "end_date": row["end_date"],
+                "created_at": row["created_at"],
+            })
+    except Exception:
+        vacations = []
+
+    settings_map = {}
+    try:
+        cur = db.execute("SELECT key, value FROM settings")
+        for row in cur.fetchall():
+            settings_map[row["key"]] = row["value"]
+    except Exception:
+        settings_map = {}
+    for key, default in SETTINGS_DEFAULTS.items():
+        settings_map.setdefault(key, default)
+
+    payload = {
+        "meta": {
+            "version": BACKUP_VERSION,
+            "exported_at": datetime.now(APP_TZ).isoformat(),
+        },
+        "database": {
+            "users": users,
+            "vacations": vacations,
+            "settings": settings_map,
+        },
+        "mappings": {
+            "courses": _parse_mapping(COURSE_MAP_PATH),
+            "rooms": _parse_mapping(ROOM_MAP_PATH),
+        },
+        "seen": {
+            "subjects_raw": sorted(set(SEEN_SUBJECTS_RAW)),
+            "rooms_raw": sorted(set(SEEN_ROOMS_RAW)),
+        },
+    }
+    return payload
+
+
+def _apply_backup_payload(payload: dict) -> None:
+    """Restore data from a backup payload (admin only)."""
+    if not isinstance(payload, dict):
+        raise ValueError("backup_payload_invalid")
+
+    db_section = payload.get("database") or {}
+    mappings_section = payload.get("mappings") or {}
+    seen_section = payload.get("seen") or {}
+    if not isinstance(db_section, dict):
+        db_section = {}
+    if not isinstance(mappings_section, dict):
+        mappings_section = {}
+    if not isinstance(seen_section, dict):
+        seen_section = {}
+
+    db = get_db()
+    db.execute("DELETE FROM users")
+    db.execute("DELETE FROM vacations")
+    db.execute("DELETE FROM settings")
+    db.commit()
+
+    users = db_section.get("users") or []
+    if isinstance(users, list):
+        for entry in users:
+            if not isinstance(entry, dict):
+                continue
+            username = (entry.get("username") or "").strip()
+            if not username:
+                continue
+            try:
+                user_id = int(entry.get("id"))
+            except (TypeError, ValueError):
+                user_id = None
+            profile = entry.get("profile") if isinstance(entry.get("profile"), dict) else None
+            if profile is None:
+                profile_raw = entry.get("profile_json")
+                if isinstance(profile_raw, str) and profile_raw.strip():
+                    try:
+                        profile = json.loads(profile_raw)
+                    except Exception:
+                        profile = None
+            if profile is None:
+                profile = _empty_profile()
+            profile_json = json.dumps(_normalise_profile(profile))
+            created_at = entry.get("created_at") or datetime.utcnow().isoformat()
+            db.execute(
+                "INSERT INTO users (id, username, password_hash, password_plain, profile_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, username, entry.get("password_hash") or "", entry.get("password_plain"), profile_json, created_at)
+            )
+
+    vacations = db_section.get("vacations") or []
+    if isinstance(vacations, list):
+        for entry in vacations:
+            if not isinstance(entry, dict):
+                continue
+            title = (entry.get("title") or "").strip()
+            start_date = (entry.get("start_date") or "").strip()
+            end_date = (entry.get("end_date") or start_date).strip()
+            if not title or not start_date:
+                continue
+            try:
+                vac_id = int(entry.get("id"))
+            except (TypeError, ValueError):
+                vac_id = None
+            created_at = entry.get("created_at") or datetime.utcnow().isoformat()
+            db.execute(
+                "INSERT INTO vacations (id, title, start_date, end_date, created_at) VALUES (?, ?, ?, ?, ?)",
+                (vac_id, title, start_date, end_date, created_at)
+            )
+
+    settings_in = db_section.get("settings") if isinstance(db_section, dict) else {}
+    settings_payload = SETTINGS_DEFAULTS.copy()
+    if isinstance(settings_in, dict):
+        for key, value in settings_in.items():
+            if key in SETTINGS_DEFAULTS:
+                settings_payload[key] = str(value)
+    _set_settings(settings_payload)
+
+    courses = mappings_section.get("courses")
+    if isinstance(courses, dict):
+        _write_mapping_txt(COURSE_MAP_PATH, {norm_key(k): (v or "").strip() for k, v in courses.items()})
+    rooms = mappings_section.get("rooms")
+    if isinstance(rooms, dict):
+        _write_mapping_txt(ROOM_MAP_PATH, {norm_key(k): (v or "").strip() for k, v in rooms.items()})
+
+    global SEEN_SUBJECTS_RAW, SEEN_ROOMS_RAW, _last_seen_flush
+    subs_raw = seen_section.get("subjects_raw")
+    if isinstance(subs_raw, list):
+        SEEN_SUBJECTS_RAW = sorted({str(s or "").strip() for s in subs_raw if str(s or "").strip()})
+        _save_seen_raw(SEEN_SUB_RAW_PATH, SEEN_SUBJECTS_RAW)
+    rooms_raw = seen_section.get("rooms_raw")
+    if isinstance(rooms_raw, list):
+        SEEN_ROOMS_RAW = sorted({str(r or "").strip() for r in rooms_raw if str(r or "").strip()})
+        _save_seen_raw(SEEN_ROOM_RAW_PATH, SEEN_ROOMS_RAW)
+    _last_seen_flush = time.time()
+    db.commit()
+
+
+@app.route("/api/admin/backup")
+def admin_backup():
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    payload = _build_backup_payload()
+    filename = f"untis-backup-{datetime.now(APP_TZ).strftime('%Y%m%d-%H%M%S')}.json"
+    resp = make_response(json.dumps(payload, ensure_ascii=False, indent=2))
+    resp.headers["Content-Type"] = "application/json"
+    resp.headers["Content-Disposition"] = f'attachment; filename=\"{filename}\"'
+    return _no_store(resp)
+
+
+@app.route("/api/admin/restore", methods=["POST"])
+def admin_restore():
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"ok": False, "error": "invalid_backup"}), 400
+    try:
+        _apply_backup_payload(payload)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception:
+        app.logger.exception("restore failed")
+        return jsonify({"ok": False, "error": "restore_failed"}), 500
+    return _no_store(jsonify({"ok": True}))
+
 @app.route("/api/admin/state")
 def admin_state():
     if not _require_admin():
@@ -687,7 +804,6 @@ def admin_state():
     user_rows = []
     try:
         cur = get_db().execute(
-            "SELECT id, username, password_plain, password_hash FROM users ORDER BY LOWER(username)" if not USE_PG else
             "SELECT id, username, password_plain, password_hash FROM users ORDER BY LOWER(username)"
         )
         rows = cur.fetchall()
@@ -807,16 +923,10 @@ def admin_vacations():
         return jsonify({"ok": False, "error": "invalid_date"}), 400
     if end < start:
         start, end = end, start
-    if USE_PG:
-        db.execute(
-            "INSERT INTO vacations (title, start_date, end_date) VALUES (%s, %s, %s)",
-            (title, start.isoformat(), end.isoformat())
-        )
-    else:
-        db.execute(
-            "INSERT INTO vacations (title, start_date, end_date) VALUES (?, ?, ?)",
-            (title, start.isoformat(), end.isoformat())
-        )
+    db.execute(
+        "INSERT INTO vacations (title, start_date, end_date) VALUES (?, ?, ?)",
+        (title, start.isoformat(), end.isoformat())
+    )
     db.commit()
     return _no_store(jsonify({"ok": True}))
 
@@ -837,8 +947,7 @@ def admin_delete_vacation(vac_id: int):
     if not _require_admin():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     db = get_db()
-    sql = "DELETE FROM vacations WHERE id = %s" if USE_PG else "DELETE FROM vacations WHERE id = ?"
-    cur = db.execute(sql, (vac_id,))
+    cur = db.execute("DELETE FROM vacations WHERE id = ?", (vac_id,))
     db.commit()
     if cur.rowcount == 0:
         return _no_store(jsonify({"ok": False, "error": "not_found"})), 404
