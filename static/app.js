@@ -1121,15 +1121,25 @@ function showView(view) {
     if (!modal) return;
 
     const accountMode = state.loggedIn && view === "account";
-    const choiceMode = !accountMode && view === "choice";
+    const choiceVisible = !accountMode;
 
     if (accountView) accountView.style.display = accountMode ? "grid" : "none";
 
-    if (choiceBlock) choiceBlock.style.display = choiceMode ? "grid" : "none";
+    if (choiceBlock) choiceBlock.style.display = choiceVisible ? "grid" : "none";
 
     if (loginForm) loginForm.style.display = accountMode ? "none" : (view === "login" ? "grid" : "none");
 
     if (registerForm) registerForm.style.display = accountMode ? "none" : (view === "register" ? "grid" : "none");
+
+    choiceButtons.forEach(btn => {
+      const target = btn.dataset.view === "register" ? "register" : "login";
+      const active = !accountMode && view === target;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+
+    if (view === "login" && registerError) registerError.textContent = "";
+    if (view === "register" && loginError) loginError.textContent = "";
 
     currentView = accountMode ? "account" : view;
 
@@ -1534,11 +1544,12 @@ function showView(view) {
 
       if (modal && modal.getAttribute("aria-hidden") === "false") {
 
-        showView("login");
+        currentView = "choice";
+        showView("choice");
 
       } else {
 
-        openModal("login", true);
+        openModal("choice", true);
 
       }
 
@@ -1634,11 +1645,11 @@ function showView(view) {
 
     if (modal?.getAttribute("aria-hidden") === "false") {
 
-      showView("login");
+      showView("choice");
 
     } else {
 
-      openModal("login", true);
+      openModal("choice", true);
 
     }
 

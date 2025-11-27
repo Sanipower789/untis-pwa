@@ -394,10 +394,18 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   font-weight:700;
   cursor:pointer;
 }
+.auth-choice-btn.active{
+  border-color:#3f86ff;
+  box-shadow:0 0 0 2px rgba(63,134,255,.2);
+}
 .auth-choice-btn.primary{
   background:#2c59a0;
   border-color:#2c59a0;
   color:#fff;
+}
+.auth-choice-btn.primary.active{
+  background:#3574d2;
+  border-color:#3574d2;
 }
 .auth-form{
   display:grid;
