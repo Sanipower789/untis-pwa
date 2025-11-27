@@ -286,32 +286,19 @@ function vacationsOnDate(iso){
 /* Strong canonical normaliser (umlauts, (), dashes, tags, spaces) */
 
 const normKey = (s) => {
-
   if (!s) return "";
-
   s = String(s)
-
         .trim()
-
-        .replaceAll("ä","a").replaceAll("ö","o").replaceAll("ü","u")
-
-        .replaceAll("Ä","a").replaceAll("Ö","o").replaceAll("Ü","u")
-
+        .replaceAll("\u00e4", "a").replaceAll("\u00f6", "o").replaceAll("\u00fc", "u")
+        .replaceAll("\u00c4", "a").replaceAll("\u00d6", "o").replaceAll("\u00dc", "u")
         .toLowerCase()
-
         .replace(/\s+/g, " ")
-
         .replace(/[()]/g, " ")
-
-        .replace(/[--]+/g, " ")
-
+        .replace(/[-\u2013\u2014\u2011\u2012\u2212]+/g, " ")
+        .replace(/["'\u00b4`]+/g, " ")
         .replace(/\b(gk|lk|ag)\b/g, " ");
-
   return s.replace(/\s+/g, " ").trim();
-
 };
-
-
 
 /* --- Mapping dicts for timetable rendering (from /api/mappings) --- */
 
@@ -401,6 +388,26 @@ function mapSubject(lesson) {
 
   return live || orig || "";
 
+}
+
+// Check whether a lesson matches the currently selected courses (using raw, live and mapped names)
+function lessonMatchesSelection(lesson, selectedSet) {
+  if (!(selectedSet instanceof Set) || selectedSet.size === 0) return true;
+  const candidates = [];
+  const subjOrig = lesson.subject_original ?? "";
+  const subjLive = lesson.subject ?? "";
+  candidates.push(normKey(subjOrig));
+  candidates.push(normKey(subjLive));
+  const resolved = [
+    resolveCourseKey(subjOrig),
+    resolveCourseKey(subjLive),
+    resolveCourseKey(mapSubject(lesson))
+  ];
+  resolved.forEach(k => { if (k) candidates.push(k); });
+  for (const key of candidates) {
+    if (key && selectedSet.has(key)) return true;
+  }
+  return false;
 }
 
 
@@ -2607,15 +2614,7 @@ async function loadTimetable(force = false) {
 
     if (selectedSet.size > 0) {
 
-      lessons = lessons.filter((l) => {
-
-        const keyOrig = normKey(l.subject_original ?? "");
-
-        const keyLive = normKey(l.subject ?? "");
-
-        return selectedSet.has(keyOrig) || selectedSet.has(keyLive);
-
-      });
+      lessons = lessons.filter((l) => lessonMatchesSelection(l, selectedSet));
 
     }
 
