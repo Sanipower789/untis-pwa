@@ -1054,9 +1054,9 @@ const Auth = (() => {
 
   const logoutButton = document.getElementById("logout-button");
 
-  const tabs = Array.from(document.querySelectorAll(".auth-tab"));
+  const choiceButtons = Array.from(document.querySelectorAll(".auth-choice-btn"));
 
-  const tabsContainer = modal ? modal.querySelector(".auth-tabs") : null;
+  const choiceBlock = modal ? modal.querySelector(".auth-choice") : null;
 
   const loginError = loginForm ? loginForm.querySelector(".auth-error") : null;
 
@@ -1066,7 +1066,7 @@ const Auth = (() => {
 
 
 
-  let currentView = "register";
+  let currentView = "choice";
 
   let state = { loggedIn: false, username: null };
 
@@ -1116,23 +1116,22 @@ const Auth = (() => {
 
 
 
-  function showView(view) {
+function showView(view) {
 
     if (!modal) return;
 
     const accountMode = state.loggedIn && view === "account";
+    const choiceMode = !accountMode && view === "choice";
 
     if (accountView) accountView.style.display = accountMode ? "grid" : "none";
+
+    if (choiceBlock) choiceBlock.style.display = choiceMode ? "grid" : "none";
 
     if (loginForm) loginForm.style.display = accountMode ? "none" : (view === "login" ? "grid" : "none");
 
     if (registerForm) registerForm.style.display = accountMode ? "none" : (view === "register" ? "grid" : "none");
 
-    if (tabsContainer) tabsContainer.style.display = accountMode ? "none" : "flex";
-
-    tabs.forEach(tab => tab.classList.toggle("active", tab.dataset.view === view));
-
-    currentView = accountMode ? "login" : view;
+    currentView = accountMode ? "account" : view;
 
   }
 
@@ -1156,7 +1155,7 @@ const Auth = (() => {
 
     document.body.style.overflow = "hidden";
 
-    const target = state.loggedIn ? "account" : (view || "register");
+    const target = state.loggedIn ? "account" : (view || "choice");
 
     showView(target);
 
@@ -1662,15 +1661,12 @@ const Auth = (() => {
       initDone = true;
 
       setButtonLabel();
-      // Default to register view for first open when logged out
       if (!state.loggedIn) {
-        showView("register");
+        showView("choice");
       }
 
       if (authButton) {
-
-        authButton.addEventListener("click", () => openModal(state.loggedIn ? "account" : currentView));
-
+        authButton.addEventListener("click", () => openModal(state.loggedIn ? "account" : "choice"));
       }
 
       closeBtn?.addEventListener("click", closeModal);
@@ -1678,27 +1674,17 @@ const Auth = (() => {
       modal?.addEventListener("click", handleBackdropClick);
 
       document.addEventListener("keydown", (ev) => {
-
         if (ev.key === "Escape" && !forceLogin && modal?.getAttribute("aria-hidden") === "false") {
-
           closeModal();
-
         }
-
       });
 
-      tabs.forEach(tab => {
-
-        tab.addEventListener("click", () => {
-
-          const view = tab.dataset.view || "login";
-
+      choiceButtons.forEach(btn => {
+        btn.addEventListener("click", () => {
+          const view = btn.dataset.view === "login" ? "login" : "register";
           currentView = view;
-
           showView(view);
-
         });
-
       });
 
       loginForm?.addEventListener("submit", (ev) => {
@@ -2763,8 +2749,10 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
 
       await Auth.init();
-
-      await Auth.ensureAuthenticated();
+      const enforceLogin = typeof isStandalone === "function" && isStandalone();
+      if (enforceLogin) {
+        await Auth.ensureAuthenticated();
+      }
 
     } catch (err) {
 

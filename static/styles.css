@@ -379,6 +379,26 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   border-color:#2c59a0;
   color:#fff;
 }
+.auth-choice{
+  display:grid;
+  gap:10px;
+  margin:12px 0 16px;
+}
+.auth-choice-btn{
+  width:100%;
+  background:#1f2026;
+  border:1px solid #32343f;
+  color:#d6d7dd;
+  border-radius:10px;
+  padding:10px;
+  font-weight:700;
+  cursor:pointer;
+}
+.auth-choice-btn.primary{
+  background:#2c59a0;
+  border-color:#2c59a0;
+  color:#fff;
+}
 .auth-form{
   display:grid;
   gap:10px;
