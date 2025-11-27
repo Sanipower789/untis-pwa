@@ -116,10 +116,10 @@
       <h2 id="auth-modal-title">Account</h2>
       <p id="auth-description" class="muted">Bitte melde dich an, um fortzufahren.</p>
       <div class="auth-tabs">
-        <button type="button" data-view="login" class="auth-tab active">Einloggen</button>
-        <button type="button" data-view="register" class="auth-tab">Registrieren</button>
+        <button type="button" data-view="login" class="auth-tab">Einloggen</button>
+        <button type="button" data-view="register" class="auth-tab active">Registrieren</button>
       </div>
-      <form id="login-form" class="auth-form">
+      <form id="login-form" class="auth-form" style="display:none;">
         <label>Benutzername
           <input type="text" name="username" autocomplete="username" required>
         </label>
@@ -129,7 +129,7 @@
         <button type="submit" class="primary">Einloggen</button>
         <p class="auth-error muted" role="alert"></p>
       </form>
-      <form id="register-form" class="auth-form" style="display:none;">
+      <form id="register-form" class="auth-form">
         <label>Benutzername
           <input type="text" name="username" autocomplete="username" required>
         </label>

@@ -1066,7 +1066,7 @@ const Auth = (() => {
 
 
 
-  let currentView = "login";
+  let currentView = "register";
 
   let state = { loggedIn: false, username: null };
 
