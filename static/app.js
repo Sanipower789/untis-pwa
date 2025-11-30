@@ -333,6 +333,8 @@ function normaliseExam(rec){
   const end   = toHM(rec.end || rec.endTime);
   const subj  = String(rec.subject || rec.subjectName || "").trim();
   const name  = String(rec.name || rec.title || subj || "Klausur").trim();
+  const roomsArr = Array.isArray(rec.rooms) ? rec.rooms.filter(Boolean) : [];
+  const roomStr = roomsArr.length ? roomsArr.join(", ") : String(rec.room || "").trim();
   const periodStart = inferPeriodFromTime(start);
   const periodEnd   = inferPeriodFromTime(end) || periodStart;
   return {
@@ -344,6 +346,8 @@ function normaliseExam(rec){
     periodEnd,
     startTime: start,
     endTime: end,
+    room: roomStr,
+    rooms: roomsArr,
     source: "remote",
     classes: Array.isArray(rec.classes) ? rec.classes.filter(Boolean) : [],
     teachers: Array.isArray(rec.teachers) ? rec.teachers.filter(Boolean) : []
@@ -2942,6 +2946,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
           <span>${escapeHtml(klausur.name)}</span>
 
           ${klausur.subject ? `<span>&bull; ${escapeHtml(klausur.subject)}</span>` : ""}
+          ${klausur.room ? `<span>&bull; ${escapeHtml(klausur.room)}</span>` : ""}
 
         </div>
 
@@ -2952,6 +2957,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
         { label: "Zeitraum", value: `${periodLabel} (${formatTimeRange(startTime, endTime)})` }
       ];
       if (klausur.subject) meta.push({ label: "Fach", value: klausur.subject });
+      if (klausur.room) meta.push({ label: "Raum", value: klausur.room });
       card.addEventListener("click", () => showLessonOverlay({
         title: klausur.name || "Klausur",
         subtitle: klausur.subject ? `${klausur.subject} - ${datePretty}` : datePretty,
@@ -3074,6 +3080,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
       <span>${escapeHtml(k.name || "Klausur")}</span>
 
       ${k.subject ? `<span>&bull; ${escapeHtml(k.subject)}</span>` : ""}
+      ${k.room ? `<span>&bull; ${escapeHtml(k.room)}</span>` : ""}
 
 
 
@@ -3098,6 +3105,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
   ];
 
   if (k.subject) meta.push({ label: "Fach", value: k.subject });
+  if (k.room) meta.push({ label: "Raum", value: k.room });
 
   card.addEventListener("click", () => showLessonOverlay({
     title: k.name || "Klausur",
