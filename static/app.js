@@ -673,6 +673,47 @@ function lessonMatchesSelection(lesson, selectedSet) {
 
 
 
+/* Exams: match against selected courses using subject/name/class labels */
+function examCourseKeys(exam){
+  const keys = new Set();
+  if (!exam || typeof exam !== "object") return keys;
+  const push = (val) => {
+    if (!val) return;
+    const key = resolveCourseKey(val) || normKey(val);
+    if (key) keys.add(key);
+  };
+  push(exam.subject);
+  push(exam.name);
+  // also try mapped labels from course mapping for better hits
+  const maybeMap = (val) => {
+    const mapped = lookup(COURSE_MAP, val);
+    if (mapped !== undefined && mapped !== null && mapped !== val) push(mapped);
+  };
+  maybeMap(exam.subject);
+  maybeMap(exam.name);
+  if (Array.isArray(exam.classes)) exam.classes.forEach(push);
+  return keys;
+}
+
+function examMatchesSelection(exam, selectedSet){
+  if (!(selectedSet instanceof Set) || selectedSet.size === 0) return true;
+  const keys = examCourseKeys(exam);
+  if (!keys.size) return false;
+  for (const key of keys) {
+    if (selectedSet.has(key)) return true;
+  }
+  return false;
+}
+
+function bestExamKey(exam, selectedSet){
+  const keys = Array.from(examCourseKeys(exam));
+  if (selectedSet instanceof Set && selectedSet.size){
+    const match = keys.find(k => selectedSet.has(k));
+    if (match) return match;
+  }
+  return keys[0] || null;
+}
+
 /* ================== KLAUSUREN (Local) ================== */
 
 const LS_KLAUS = "klausuren_v1";
@@ -1068,6 +1109,7 @@ const btnColorSubjectClear= document.getElementById('colorSubjectClear');
 const listColorSubjects   = document.getElementById('colorSubjectList');
 
 const elPaletteSwatches   = document.getElementById('paletteSwatches');
+const elPaletteSwatchesGlobal = document.getElementById('paletteSwatchesGlobal');
 
 
 
@@ -1169,6 +1211,10 @@ function populateColorSubjectsSelect(currentValue = "", prefs) {
 
   }
 
+  const size = Math.min(8, Math.max(4, options.length));
+  selColorSubject.size = size;
+  selColorSubject.dataset.scrollable = "1";
+
 }
 
 
@@ -1235,25 +1281,17 @@ function renderSubjectColorList(prefObj) {
 
 }
 
-function renderPaletteSwatches() {
-  if (!elPaletteSwatches) return;
-  elPaletteSwatches.innerHTML = "";
+function renderPaletteSwatches(targetEl, onPick) {
+  if (!targetEl || typeof onPick !== "function") return;
+  targetEl.innerHTML = "";
   DESIGN_SWATCHES.forEach(color => {
     const sw = document.createElement("button");
     sw.type = "button";
     sw.className = "palette-swatch";
     sw.style.background = color;
     sw.title = color;
-    sw.addEventListener("click", () => {
-      if (inpColorSubject) inpColorSubject.value = color;
-      const key = selColorSubject?.value || "";
-      if (key) {
-        ColorPrefs.setSubjectColor(key, color);
-        syncColorInputs(ColorPrefs.load());
-        rebuildGridNow();
-      }
-    });
-    elPaletteSwatches.appendChild(sw);
+    sw.addEventListener("click", () => onPick(color));
+    targetEl.appendChild(sw);
   });
 }
 
@@ -1281,7 +1319,25 @@ function syncColorInputs(prefObj) {
 
   renderSubjectColorList(prefs);
 
-  renderPaletteSwatches();
+  renderPaletteSwatches(elPaletteSwatches, (color) => {
+    if (inpColorSubject) inpColorSubject.value = color;
+    const key = selColorSubject?.value || "";
+    if (key) {
+      ColorPrefs.setSubjectColor(key, color);
+      syncColorInputs(ColorPrefs.load());
+      rebuildGridNow();
+    }
+  });
+
+  renderPaletteSwatches(elPaletteSwatchesGlobal, (color) => {
+    ColorPrefs.updateTheme({
+      lessonBg: color,
+      lessonBorder: shadeHex(color, -12) || color,
+      lessonText: textColorFor(color)
+    });
+    syncColorInputs(ColorPrefs.load());
+    rebuildGridNow();
+  });
 
 }
 
@@ -2602,7 +2658,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
   const valid = [];
 
-  const klausurenList = getAllKlausuren().filter(k => isWithinWeek(k.date));
+  const klausurenList = getAllKlausuren().filter(k => isWithinWeek(k.date) && examMatchesSelection(k, activeSelected));
 
   const matchedKlausurIds = new Set();
 
@@ -2903,7 +2959,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
         subtitle: klausur.subject ? `${klausur.subject} - ${datePretty}` : datePretty,
         meta
       }));
-      const klausurColorKey = resolveCourseKey(klausur.subject || "") || subjKey;
+      const klausurColorKey = bestExamKey(klausur, activeSelected) || subjKey;
       const klausurColor = klausurColorKey ? subjectColors[klausurColorKey] : null;
       if (klausurColor) {
         applyCardColor(card, klausurColor);
@@ -2982,9 +3038,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
     if (day < 1 || day > 5) return;
 
-    const examKey = resolveCourseKey(k.subject) || normKey(k.subject || "");
-
-    if (activeSelected && activeSelected.size > 0 && examKey && !activeSelected.has(examKey)) return;
+    const examKey = bestExamKey(k, activeSelected);
+    if (!examMatchesSelection(k, activeSelected)) return;
 
   const startPeriod = k.periodStart || 1;
 
@@ -3333,20 +3388,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
   }
-
-  // close sidebar when tapping outside (optional)
-
-  document.addEventListener('click', (e)=>{
-
-    if (!elSidebar.classList.contains('show')) return;
-
-    const within = elSidebar.contains(e.target) || (btnSidebar && btnSidebar.contains(e.target));
-
-    if (!within) sidebarHide();
-
-  });
-
-
 
   (async () => {
 
