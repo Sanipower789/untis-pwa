@@ -145,6 +145,19 @@ const dayIdxISO = iso => { const g=new Date(iso).getDay(); return g===0?7:g; };
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 const _norm = (x) => (x ?? "").toString().trim().replace(/\s+/g, " ").toLowerCase();
+const dedupeList = (arr) => {
+  const out = [];
+  const seen = new Set();
+  (arr || []).forEach((v) => {
+    const t = String(v || "").trim();
+    if (!t) return;
+    const k = _norm(t);
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(t);
+  });
+  return out;
+};
 
 
 
@@ -200,6 +213,33 @@ const toISODate = (dateObj) => {
 
   return `${y}-${m}-${d}`;
 
+};
+
+
+
+const mondayOf = (dateObj) => {
+  const clone = new Date(dateObj.getTime());
+  const dow = clone.getDay() || 7; // 1 = Monday, 7 = Sunday
+  clone.setDate(clone.getDate() - (dow - 1));
+  return clone;
+};
+
+const defaultWeekStartIso = () => {
+  const today = new Date();
+  const monday = mondayOf(today);
+  const dow = today.getDay();
+  if (dow === 0 || dow === 6) {
+    monday.setDate(monday.getDate() + 7);
+  }
+  return toISODate(monday);
+};
+
+const shiftWeekStart = (weekStartIso, offsetWeeks = 0) => {
+  const baseIso = weekStartIso || defaultWeekStartIso();
+  const baseDate = new Date(`${baseIso}T00:00:00`);
+  if (Number.isNaN(baseDate.getTime())) return null;
+  baseDate.setDate(baseDate.getDate() + offsetWeeks * 7);
+  return toISODate(baseDate);
 };
 
 
@@ -333,8 +373,11 @@ function normaliseExam(rec){
   const end   = toHM(rec.end || rec.endTime);
   const subj  = String(rec.subject || rec.subjectName || "").trim();
   const name  = String(rec.name || rec.title || subj || "Klausur").trim();
-  const roomsArr = Array.isArray(rec.rooms) ? rec.rooms.filter(Boolean) : [];
-  const roomStr = roomsArr.length ? roomsArr.join(", ") : String(rec.room || "").trim();
+  const roomsRaw = [];
+  if (Array.isArray(rec.rooms)) roomsRaw.push(...rec.rooms);
+  if (rec.room) roomsRaw.push(...String(rec.room).split(","));
+  const roomsArr = dedupeList(roomsRaw);
+  const roomStr = roomsArr.join(", ");
   const periodStart = inferPeriodFromTime(start);
   const periodEnd   = inferPeriodFromTime(end) || periodStart;
   return {
@@ -631,6 +674,12 @@ function mapRoom(lesson) {
 
 }
 
+function mapRoomValue(room) {
+  const val = lookup(ROOM_MAP, room);
+  if (val !== undefined && val !== null) return val;
+  return room;
+}
+
 
 
 // Subject display with mapping; fall back to original/live names when mapping empty/missing
@@ -716,6 +765,17 @@ function bestExamKey(exam, selectedSet){
     if (match) return match;
   }
   return keys[0] || null;
+}
+
+function mapExamRooms(exam){
+  const rawRooms = [];
+  if (Array.isArray(exam?.rooms)) rawRooms.push(...exam.rooms);
+  if (exam?.room) rawRooms.push(...String(exam.room).split(","));
+  const mapped = rawRooms
+    .map(r => mapRoomValue(r.trim()))
+    .filter(Boolean);
+  const deduped = dedupeList(mapped);
+  return { list: deduped, label: deduped.join(", ") };
 }
 
 /* ================== KLAUSUREN (Local) ================== */
@@ -1115,6 +1175,10 @@ const listColorSubjects   = document.getElementById('colorSubjectList');
 const elPaletteSwatches   = document.getElementById('paletteSwatches');
 const elPaletteSwatchesGlobal = document.getElementById('paletteSwatchesGlobal');
 
+const btnWeekPrev    = document.getElementById('week-prev');
+const btnWeekNext    = document.getElementById('week-next');
+const elWeekRange    = document.getElementById('week-range');
+
 
 
 const overlayRoot   = document.getElementById('lesson-overlay');
@@ -1134,6 +1198,32 @@ const rebuildGridNow = () => {
     buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys, window.__timeColumnWidth);
   }
 };
+
+const updateWeekRangeLabel = (weekStartIso) => {
+  if (!elWeekRange) return;
+  if (!weekStartIso) {
+    elWeekRange.textContent = "";
+    return;
+  }
+  const start = new Date(`${weekStartIso}T00:00:00`);
+  if (Number.isNaN(start.getTime())) {
+    elWeekRange.textContent = "";
+    return;
+  }
+  const end = new Date(start.getTime() + 4 * 24 * 3600 * 1000);
+  elWeekRange.textContent = `${formatDate(toISODate(start))} - ${formatDate(toISODate(end))}`;
+};
+
+const changeWeek = (offset) => {
+  const baseIso = (typeof window.__currentWeekStart === "string" && window.__currentWeekStart) || defaultWeekStartIso();
+  const target = shiftWeekStart(baseIso, offset);
+  if (!target) return;
+  window.__currentWeekStart = target;
+  loadTimetable(false, target);
+};
+
+btnWeekPrev?.addEventListener('click', () => changeWeek(-1));
+btnWeekNext?.addEventListener('click', () => changeWeek(1));
 
 function sidebarShow(){ elSidebar.classList.add('show'); }
 
@@ -1552,8 +1642,10 @@ formKlausur?.addEventListener('submit', (e) => {
 
 
 function renderKlausurList() {
-
-  const data = getAllKlausuren().sort((a,b)=>{
+  const selectedCourses = getSelectedCourseKeys();
+  const data = getAllKlausuren()
+    .filter(k => examMatchesSelection(k, selectedCourses))
+    .sort((a,b)=>{
 
     if (a.date!==b.date) return a.date.localeCompare(b.date);
 
@@ -1565,7 +1657,9 @@ function renderKlausurList() {
 
   if (!data.length) {
 
-    listKlausuren.innerHTML = '<div class="muted">Noch keine Klausuren.</div>';
+    listKlausuren.innerHTML = selectedCourses.size
+      ? '<div class="muted">Keine Klausuren f\u00fcr deine Kurs-Auswahl.</div>'
+      : '<div class="muted">Noch keine Klausuren.</div>';
 
     return;
 
@@ -2590,6 +2684,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
   }
 
+  updateWeekRangeLabel(weekStart);
+
   if (selectedKeys instanceof Set) {
 
     window.__selectedCourseKeys = new Set(selectedKeys);
@@ -2934,6 +3030,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
       const datePretty = formatDate(klausur.date || l.date);
 
       const periodLabel = formatPeriodRange(startPeriod, endPeriod);
+      const showSubject = klausur.subject && _norm(klausur.subject) !== _norm(klausur.name);
+      const { label: roomLabel } = mapExamRooms(klausur);
 
       card.style.gridRow = `${rowStart + 2} / span ${spanK}`;
 
@@ -2945,8 +3043,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
           <span>${escapeHtml(klausur.name)}</span>
 
-          ${klausur.subject ? `<span>&bull; ${escapeHtml(klausur.subject)}</span>` : ""}
-          ${klausur.room ? `<span>&bull; ${escapeHtml(klausur.room)}</span>` : ""}
+          ${showSubject ? `<span>&bull; ${escapeHtml(klausur.subject)}</span>` : ""}
+          ${roomLabel ? `<span>&bull; ${escapeHtml(roomLabel)}</span>` : ""}
 
         </div>
 
@@ -2956,8 +3054,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
         { label: "Datum", value: datePretty },
         { label: "Zeitraum", value: `${periodLabel} (${formatTimeRange(startTime, endTime)})` }
       ];
-      if (klausur.subject) meta.push({ label: "Fach", value: klausur.subject });
-      if (klausur.room) meta.push({ label: "Raum", value: klausur.room });
+      if (showSubject) meta.push({ label: "Fach", value: klausur.subject });
+      if (roomLabel) meta.push({ label: "Raum", value: roomLabel });
       card.addEventListener("click", () => showLessonOverlay({
         title: klausur.name || "Klausur",
         subtitle: klausur.subject ? `${klausur.subject} - ${datePretty}` : datePretty,
@@ -3079,8 +3177,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
       <span>${escapeHtml(k.name || "Klausur")}</span>
 
-      ${k.subject ? `<span>&bull; ${escapeHtml(k.subject)}</span>` : ""}
-      ${k.room ? `<span>&bull; ${escapeHtml(k.room)}</span>` : ""}
+      ${(_norm(k.subject || "") && _norm(k.subject) !== _norm(k.name || "")) ? `<span>&bull; ${escapeHtml(k.subject)}</span>` : ""}
+      ${mapExamRooms(k).label ? `<span>&bull; ${escapeHtml(mapExamRooms(k).label)}</span>` : ""}
 
 
 
@@ -3104,8 +3202,10 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
   ];
 
-  if (k.subject) meta.push({ label: "Fach", value: k.subject });
-  if (k.room) meta.push({ label: "Raum", value: k.room });
+  const showSubject = k.subject && _norm(k.subject) !== _norm(k.name || "");
+  const { label: roomLabel } = mapExamRooms(k);
+  if (showSubject) meta.push({ label: "Fach", value: k.subject });
+  if (roomLabel) meta.push({ label: "Raum", value: roomLabel });
 
   card.addEventListener("click", () => showLessonOverlay({
     title: k.name || "Klausur",
@@ -3204,7 +3304,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
 /* --- Fetch + refresh --- */
 
-async function loadTimetable(force = false) {
+async function loadTimetable(force = false, weekStart = null) {
 
   if (typeof Auth === "object" && Auth && typeof Auth.isLoggedIn === "function" && !Auth.isLoggedIn()) {
 
@@ -3221,9 +3321,19 @@ async function loadTimetable(force = false) {
 
     await loadCourseOptions();
 
+    const params = new URLSearchParams();
+    params.set("ts", Date.now());
+    if (force) params.set("force", "1");
+    const targetWeekStart =
+      (typeof weekStart === "string" && weekStart) ||
+      (typeof window.__currentWeekStart === "string" && window.__currentWeekStart) ||
+      defaultWeekStartIso();
+    if (targetWeekStart) {
+      params.set("weekStart", targetWeekStart);
+      window.__currentWeekStart = targetWeekStart;
+    }
 
-
-    const res = await fetch(`/api/timetable?ts=${Date.now()}${force ? "&force=1":""}`, { cache: "no-store" });
+    const res = await fetch(`/api/timetable?${params.toString()}`, { cache: "no-store" });
 
     if (!res.ok) throw new Error(`/api/timetable ${res.status}`);
 
@@ -3285,9 +3395,8 @@ async function loadTimetable(force = false) {
 
     });
 
-
-
-    buildGrid(lessons, typeof data.weekStart === "string" ? data.weekStart : null, window.__selectedCourseKeys, timeColumnWidth);
+    const effectiveWeekStart = typeof data.weekStart === "string" ? data.weekStart : targetWeekStart;
+    buildGrid(lessons, effectiveWeekStart, window.__selectedCourseKeys, timeColumnWidth);
 
     populateKlausurSubjects(lessons);
 
@@ -3296,6 +3405,8 @@ async function loadTimetable(force = false) {
     renderKlausurList();
 
   } catch (err) {
+
+    updateWeekRangeLabel(window.__currentWeekStart);
 
     const container = document.getElementById("timetable");
 

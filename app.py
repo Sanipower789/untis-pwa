@@ -372,6 +372,20 @@ def _hm_from_str(s: str) -> str:
     except Exception:
         return ""
 
+def _split_rooms(value) -> list[str]:
+    rooms: list[str] = []
+    if isinstance(value, str):
+        rooms.extend([p.strip() for p in value.split(",")])
+    elif isinstance(value, list):
+        for v in value:
+            if isinstance(v, str):
+                rooms.extend([p.strip() for p in v.split(",")])
+            else:
+                rooms.append(str(v or "").strip())
+    else:
+        rooms.append(str(value or "").strip())
+    return [r for r in rooms if r]
+
 # ---------- Normalisation (canonical across app) ----------
 _UML = str.maketrans({"ä":"a","ö":"o","ü":"u","Ä":"a","Ö":"o","Ü":"u"})
 
@@ -480,6 +494,32 @@ def record_seen_raw(lessons: list[dict]):
         _save_seen_raw(SEEN_ROOM_RAW_PATH, SEEN_ROOMS_RAW)
         _last_seen_flush = now
 
+def record_seen_rooms_from_exams(exams: list[dict]):
+    """Capture room variants from exams (manual or remote)."""
+    global _last_seen_flush
+    if not exams:
+        return
+    changed = False
+    for e in exams:
+        if not isinstance(e, dict):
+            continue
+        rooms = []
+        if "rooms" in e:
+            rlist = e.get("rooms")
+            if isinstance(rlist, list):
+                rooms.extend([str(r or "").strip() for r in rlist])
+        if "room" in e:
+            rooms.extend(_split_rooms(e.get("room")))
+        for r in rooms:
+            r = (r or "").strip()
+            if r and r not in SEEN_ROOMS_RAW:
+                SEEN_ROOMS_RAW.append(r)
+                changed = True
+    now = time.time()
+    if changed and (now - _last_seen_flush > 15):
+        _save_seen_raw(SEEN_ROOM_RAW_PATH, SEEN_ROOMS_RAW)
+        _last_seen_flush = now
+
 def _group_variants(raw_list: list[str]) -> dict[str, list[str]]:
     """Return { normalised_key: [raw variants…] }."""
     grouped: dict[str, set[str]] = {}
@@ -531,6 +571,8 @@ def _normalize_manual_exam_input(data: dict) -> dict | None:
     classes = _clean_list_str(data.get("classes"))
     teachers = _clean_list_str(data.get("teachers"))
     room = _clean_str(data.get("room"))
+    rooms = _split_rooms(room or data.get("rooms") or [])
+    room_label = ", ".join(_clean_list_str(rooms) or ([] if not room else [room]))
     note = _clean_str(data.get("note"))
     return {
         "subject": subj,
@@ -540,7 +582,8 @@ def _normalize_manual_exam_input(data: dict) -> dict | None:
         "end_time": end_hm,
         "classes": classes,
         "teachers": teachers,
-        "room": room,
+        "room": room_label,
+        "rooms": _clean_list_str(rooms),
         "note": note,
     }
 
@@ -553,6 +596,7 @@ def _row_to_manual_exam(row) -> dict:
         teachers = json.loads(row["teachers_json"]) if row.get("teachers_json") else []
     except Exception:
         teachers = []
+    rooms = _split_rooms(row.get("room"))
     return {
         "id": f"manual-{row.get('id')}",
         "subject": row.get("subject") or "",
@@ -563,6 +607,7 @@ def _row_to_manual_exam(row) -> dict:
         "classes": classes,
         "teachers": teachers,
         "room": row.get("room") or "",
+        "rooms": rooms,
         "note": row.get("note") or "",
         "source": "manual",
     }
@@ -771,6 +816,11 @@ def api_exams():
     exams = [_norm_exam(rec) for rec in raw_exams]
     exams = [e for e in exams if e and e.get("date")]
     exams = manual_exams + exams
+    try:
+        record_seen_rooms_from_exams(raw_exams)
+        record_seen_rooms_from_exams(manual_exams)
+    except Exception:
+        pass
 
     payload = {
         "ok": True,
