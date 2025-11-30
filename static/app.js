@@ -1210,10 +1210,8 @@ function populateColorSubjectsSelect(currentValue = "", prefs) {
     selColorSubject.value = currentValue;
 
   }
-
-  const size = Math.min(8, Math.max(4, options.length));
-  selColorSubject.size = size;
-  selColorSubject.dataset.scrollable = "1";
+  selColorSubject.removeAttribute("size");
+  selColorSubject.multiple = false;
 
 }
 

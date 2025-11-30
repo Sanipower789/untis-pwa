@@ -141,6 +141,53 @@
   </div>
 
   <div class="row">
+    <div class="card" id="exams">
+      <h2>Prüfungen (manuell)</h2>
+      <form id="exam-form" class="vac-form">
+        <label>Fach
+          <input type="text" id="exam-subject" required placeholder="z. B. E5 G3">
+        </label>
+        <label>Name
+          <input type="text" id="exam-name" placeholder="Optional, sonst Fach">
+        </label>
+        <label>Datum
+          <input type="date" id="exam-date" required>
+        </label>
+        <label>Start
+          <input type="time" id="exam-start" required>
+        </label>
+        <label>Ende
+          <input type="time" id="exam-end" required>
+        </label>
+        <label>Klassen (Komma)
+          <input type="text" id="exam-classes" placeholder="EF, Q1">
+        </label>
+        <label>Lehrkräfte (Komma)
+          <input type="text" id="exam-teachers" placeholder="WEI, KEM">
+        </label>
+        <label>Raum(e)
+          <input type="text" id="exam-room" placeholder="A-K25">
+        </label>
+        <label>Notiz
+          <input type="text" id="exam-note" placeholder="optional">
+        </label>
+        <button type="submit">Hinzufügen</button>
+      </form>
+      <table id="exam-table">
+        <thead>
+          <tr>
+            <th>Fach / Name</th>
+            <th>Zeitraum</th>
+            <th>Klassen / Räume</th>
+            <th style="text-align:right;">Aktion</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="row">
     <div class="card" id="backup">
       <h2>Backup</h2>
       <div class="bar">
@@ -162,7 +209,7 @@ const state = {
   courses: {}, rooms: {},
   subjects_grouped: {}, rooms_grouped: {},
   unmapped_subjects: [], unmapped_rooms: [],
-  users: [], vacations: [],
+  users: [], vacations: [], exams: [],
   settings: { timeColumnWidth: "60" }
 };
 
@@ -206,6 +253,7 @@ async function loadState(){
   state.unmapped_rooms = j.unmapped_rooms || [];
   state.users = Array.isArray(j.users) ? j.users : [];
   state.vacations = Array.isArray(j.vacations) ? j.vacations : [];
+  state.exams = Array.isArray(j.exams_manual) ? j.exams_manual : [];
   state.settings = j.settings || state.settings || { timeColumnWidth: "60" };
 
   $("#sub-count").textContent  = `${Object.keys(state.subjects_grouped).length} Schlüssel`;
@@ -217,6 +265,7 @@ async function loadState(){
   renderTables();
   renderUsers();
   renderVacations();
+  renderExams();
   renderSettings();
 }
 
@@ -284,6 +333,55 @@ function renderVacations(){
       <td class="actions"><button class="danger" data-vac="${v.id}">Löschen</button></td>
     `;
     tbody.appendChild(tr);
+  });
+}
+
+const parseList = (s) => String(s || "").split(",").map(v => v.trim()).filter(Boolean);
+
+function renderExams(){
+  const tbody = $("#exam-table tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  if (!state.exams.length){
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">Keine Einträge.</td></tr>`;
+    return;
+  }
+  state.exams.forEach(ex => {
+    const classes = Array.isArray(ex.classes) ? ex.classes.join(", ") : "";
+    const rooms = ex.room || "";
+    const note = ex.note ? `<div class="muted">${escapeHtml(ex.note)}</div>` : "";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>
+        <strong>${escapeHtml(ex.name || ex.subject)}</strong>
+        <div class="muted">${escapeHtml(ex.subject || "")}</div>
+      </td>
+      <td>
+        <div>${escapeHtml(fmtDate(ex.date))}</div>
+        <div class="muted">${escapeHtml(ex.start || "")} - ${escapeHtml(ex.end || "")}</div>
+      </td>
+      <td>
+        ${classes ? `<div>${escapeHtml(classes)}</div>` : ""}
+        ${rooms ? `<div class="muted">${escapeHtml(rooms)}</div>` : ""}
+        ${note}
+      </td>
+      <td class="actions"><button class="danger btn-del-exam" data-id="${escapeHtml(ex.id || "")}">Löschen</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  $$(".btn-del-exam").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const rawId = btn.getAttribute("data-id") || "";
+      const numId = parseInt(rawId.replace(/\\D+/g, ""), 10);
+      if (!Number.isFinite(numId)) return;
+      if (!confirm("Eintrag wirklich löschen?")) return;
+      const r = await fetch(`/api/admin/exams/${numId}`, {method:"DELETE"});
+      if (r.ok){
+        await loadState();
+      } else {
+        alert("Konnte nicht löschen.");
+      }
+    });
   });
 }
 
@@ -381,6 +479,42 @@ vacForm?.addEventListener("submit", async (ev) => {
     } else {
       vacForm.reset();
       loadState();
+    }
+  } catch {
+    alert("Netzwerkfehler beim Speichern.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+const examForm = $("#exam-form");
+examForm?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const payload = {
+    subject: $("#exam-subject")?.value || "",
+    name: $("#exam-name")?.value || "",
+    date: $("#exam-date")?.value || "",
+    start_time: $("#exam-start")?.value || "",
+    end_time: $("#exam-end")?.value || "",
+    classes: parseList($("#exam-classes")?.value || ""),
+    teachers: parseList($("#exam-teachers")?.value || ""),
+    room: $("#exam-room")?.value || "",
+    note: $("#exam-note")?.value || "",
+  };
+  const btn = examForm.querySelector("button[type='submit']");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/admin/exams", {
+      method: "POST",
+      headers: {"content-type":"application/json"},
+      body: JSON.stringify(payload)
+    });
+    const j = await res.json().catch(()=>({}));
+    if (!res.ok || !j.ok){
+      alert(j.error || "Speichern fehlgeschlagen.");
+    } else {
+      examForm.reset();
+      await loadState();
     }
   } catch {
     alert("Netzwerkfehler beim Speichern.");

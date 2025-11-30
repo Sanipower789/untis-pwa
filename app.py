@@ -54,7 +54,7 @@ app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(24))
 ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN")
 DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
 SETTINGS_DEFAULTS  = {"timeColumnWidth": "60"}
-BACKUP_VERSION     = 2
+BACKUP_VERSION     = 3
 
 if not ADMIN_TOKEN:
     raise RuntimeError("ADMIN_TOKEN environment variable is required and must not be empty.")
@@ -109,11 +109,69 @@ def init_db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS exams_manual (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject TEXT NOT NULL,
+            name TEXT NOT NULL,
+            date TEXT NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            classes_json TEXT NOT NULL DEFAULT '[]',
+            teachers_json TEXT NOT NULL DEFAULT '[]',
+            room TEXT,
+            note TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
     for key, value in SETTINGS_DEFAULTS.items():
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
             (key, value)
         )
+
+    # seed sample exams if table empty (pre-load manual list)
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM exams_manual")
+        count = cur.fetchone()[0]
+        if count == 0:
+            seed_exams = [
+                {"subject": "E5 G3", "name": "E5 G3", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["KEM"], "room": "A-K25, A-K25"},
+                {"subject": "E5 G2", "name": "E5 G2", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["KAS"], "room": "B-36, B-36"},
+                {"subject": "E5 G9", "name": "E5 G9", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["STZ"], "room": "D-11, D-11"},
+                {"subject": "E5 G1", "name": "E5 G1", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["NED"], "room": "B-31, B-31"},
+                {"subject": "E5 G4", "name": "E5 G4", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["ROM"], "room": "B-F2, B-F2"},
+                {"subject": "NSK EF", "name": "NSK EF", "date": "2025-12-03", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": [], "room": "B-F2, B-F2"},
+                {"subject": "D G3", "name": "D G3", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["HEM"], "room": "A-K05, A-K05"},
+                {"subject": "D G2", "name": "D G2", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["KAR"], "room": "C-11, C-11"},
+                {"subject": "D G1", "name": "D G1", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["SCL"], "room": "B-F1, B-F1"},
+                {"subject": "D G9", "name": "D G9", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["FIE"], "room": "B-F2, B-F2"},
+                {"subject": "D G8", "name": "D G8", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["NEU"], "room": "AULA, AULA"},
+                {"subject": "D G4", "name": "D G4", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["FLOE"], "room": "AULA, AULA"},
+            ]
+            for entry in seed_exams:
+                conn.execute(
+                    """
+                    INSERT INTO exams_manual (subject, name, date, start_time, end_time, classes_json, teachers_json, room, note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entry["subject"],
+                        entry.get("name") or entry["subject"],
+                        entry["date"],
+                        entry["start_time"],
+                        entry["end_time"],
+                        json.dumps(entry.get("classes") or []),
+                        json.dumps(entry.get("teachers") or []),
+                        entry.get("room") or "",
+                        entry.get("note") or "",
+                    )
+                )
+    except Exception:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -303,6 +361,17 @@ def _hm_from_int(n) -> str:
     except Exception:
         return ""
 
+def _hm_from_str(s: str) -> str:
+    try:
+        parts = str(s or "").strip().split(":")
+        if len(parts) == 2:
+            h = int(parts[0]); m = int(parts[1])
+            return f"{h:02d}:{m:02d}"
+        num = int(float(s))
+        return f"{num // 100:02d}:{num % 100:02d}"
+    except Exception:
+        return ""
+
 # ---------- Normalisation (canonical across app) ----------
 _UML = str.maketrans({"ä":"a","ö":"o","ü":"u","Ä":"a","Ö":"o","Ü":"u"})
 
@@ -432,6 +501,79 @@ _last_exam_payload: dict[str, dict] = {}
 
 def _exam_key(start: date, end: date, exam_type: int) -> str:
     return f"{start.isoformat()}_{end.isoformat()}_{exam_type}"
+
+# ---- Manual exams (admin-managed) ----
+def _clean_str(value) -> str:
+    return str(value or "").strip()
+
+def _clean_list_str(values) -> list[str]:
+    out: list[str] = []
+    if isinstance(values, list):
+        for v in values:
+            s = _clean_str(v)
+            if s:
+                out.append(s)
+    return out
+
+def _normalise_hm(value: str) -> str:
+    return _hm_from_str(value) or _hm_from_str(_hm_from_int(value))
+
+def _normalize_manual_exam_input(data: dict) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    subj = _clean_str(data.get("subject"))
+    date_iso = _clean_str(data.get("date"))
+    start_hm = _normalise_hm(data.get("start_time") or data.get("start") or data.get("startTime"))
+    end_hm   = _normalise_hm(data.get("end_time")   or data.get("end")   or data.get("endTime"))
+    if not subj or not date_iso or not start_hm or not end_hm:
+        return None
+    name = _clean_str(data.get("name")) or subj
+    classes = _clean_list_str(data.get("classes"))
+    teachers = _clean_list_str(data.get("teachers"))
+    room = _clean_str(data.get("room"))
+    note = _clean_str(data.get("note"))
+    return {
+        "subject": subj,
+        "name": name,
+        "date": date_iso,
+        "start_time": start_hm,
+        "end_time": end_hm,
+        "classes": classes,
+        "teachers": teachers,
+        "room": room,
+        "note": note,
+    }
+
+def _row_to_manual_exam(row) -> dict:
+    try:
+        classes = json.loads(row["classes_json"]) if row.get("classes_json") else []
+    except Exception:
+        classes = []
+    try:
+        teachers = json.loads(row["teachers_json"]) if row.get("teachers_json") else []
+    except Exception:
+        teachers = []
+    return {
+        "id": f"manual-{row.get('id')}",
+        "subject": row.get("subject") or "",
+        "name": row.get("name") or row.get("subject") or "Klausur",
+        "date": row.get("date") or "",
+        "start": row.get("start_time") or "",
+        "end": row.get("end_time") or "",
+        "classes": classes,
+        "teachers": teachers,
+        "room": row.get("room") or "",
+        "note": row.get("note") or "",
+        "source": "manual",
+    }
+
+def _load_manual_exams(start: date, end: date) -> list[dict]:
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note FROM exams_manual WHERE date BETWEEN ? AND ? ORDER BY date, start_time",
+        (start.isoformat(), end.isoformat())
+    ).fetchall()
+    return [_row_to_manual_exam(dict(r)) for r in rows]
 
 # ---------------- Routes ----------------
 @app.after_request
@@ -570,6 +712,12 @@ def api_exams():
     if not force and cache_key in _last_exam_payload and (now_ts - _last_exam_key_ts.get(cache_key, 0)) < 15:
         return _no_store(jsonify(_last_exam_payload[cache_key]))
 
+    manual_exams: list[dict] = []
+    try:
+        manual_exams = _load_manual_exams(start, end)
+    except Exception:
+        manual_exams = []
+
     try:
         raw_exams = fetch_exams(start, end, exam_type) or []
         subjects  = fetch_subject_map()
@@ -580,16 +728,16 @@ def api_exams():
         err_code = "exam_fetch_failed"
         if "no right" in msg.lower() or "-8509" in msg:
             err_code = "exam_permission_denied"
+        app.logger.warning("fetch_exams failed: %s", msg)
         payload = {
-            "ok": False,
-            "error": msg,
+            "ok": True,
+            "warning": msg,
             "errorCode": err_code,
             "start": str(start),
             "end": str(end),
             "examType": exam_type,
-            "exams": [],
+            "exams": manual_exams,
         }
-        app.logger.warning("fetch_exams failed: %s", msg)
         _last_exam_payload[cache_key] = payload
         _last_exam_key_ts[cache_key] = time.time()
         return _no_store(jsonify(payload))
@@ -622,6 +770,7 @@ def api_exams():
 
     exams = [_norm_exam(rec) for rec in raw_exams]
     exams = [e for e in exams if e and e.get("date")]
+    exams = manual_exams + exams
 
     payload = {
         "ok": True,
@@ -792,6 +941,28 @@ def _build_backup_payload() -> dict:
     except Exception:
         vacations = []
 
+    exams_manual = []
+    try:
+        cur = db.execute(
+            "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, created_at FROM exams_manual ORDER BY date, start_time, id"
+        )
+        for row in cur.fetchall():
+            exams_manual.append({
+                "id": row["id"],
+                "subject": row["subject"],
+                "name": row["name"],
+                "date": row["date"],
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "classes": json.loads(row["classes_json"] or "[]"),
+                "teachers": json.loads(row["teachers_json"] or "[]"),
+                "room": row["room"],
+                "note": row["note"],
+                "created_at": row["created_at"],
+            })
+    except Exception:
+        exams_manual = []
+
     settings_map = {}
     try:
         cur = db.execute("SELECT key, value FROM settings")
@@ -810,6 +981,7 @@ def _build_backup_payload() -> dict:
         "database": {
             "users": users,
             "vacations": vacations,
+            "exams_manual": exams_manual,
             "settings": settings_map,
         },
         "mappings": {
@@ -888,6 +1060,30 @@ def _apply_backup_payload(payload: dict) -> None:
             if key in SETTINGS_DEFAULTS:
                 settings_payload[key] = str(value)
 
+    exams_manual_norm = []
+    exams_manual_in = db_section.get("exams_manual") if isinstance(db_section, dict) else []
+    if isinstance(exams_manual_in, list):
+        for entry in exams_manual_in:
+            if not isinstance(entry, dict):
+                continue
+            subj = (entry.get("subject") or "").strip()
+            date_iso = (entry.get("date") or "").strip()
+            start_hm = _normalise_hm(entry.get("start_time") or entry.get("start"))
+            end_hm = _normalise_hm(entry.get("end_time") or entry.get("end"))
+            if not subj or not date_iso or not start_hm or not end_hm:
+                continue
+            name = (entry.get("name") or "").strip() or subj
+            try:
+                exam_id = int(entry.get("id"))
+            except (TypeError, ValueError):
+                exam_id = None
+            classes = _clean_list_str(entry.get("classes") if isinstance(entry.get("classes"), list) else [])
+            teachers = _clean_list_str(entry.get("teachers") if isinstance(entry.get("teachers"), list) else [])
+            room = (entry.get("room") or "").strip()
+            note = (entry.get("note") or "").strip()
+            created_at = entry.get("created_at") or datetime.utcnow().isoformat()
+            exams_manual_norm.append((exam_id, subj, name, date_iso, start_hm, end_hm, json.dumps(classes), json.dumps(teachers), room, note, created_at))
+
     courses_map = {}
     courses = mappings_section.get("courses")
     if isinstance(courses, dict):
@@ -913,6 +1109,7 @@ def _apply_backup_payload(payload: dict) -> None:
         db.execute("DELETE FROM users")
         db.execute("DELETE FROM vacations")
         db.execute("DELETE FROM settings")
+        db.execute("DELETE FROM exams_manual")
 
         for row in users_norm:
             db.execute(
@@ -923,6 +1120,12 @@ def _apply_backup_payload(payload: dict) -> None:
         for row in vacations_norm:
             db.execute(
                 "INSERT INTO vacations (id, title, start_date, end_date, created_at) VALUES (?, ?, ?, ?, ?)",
+                row
+            )
+
+        for row in exams_manual_norm:
+            db.execute(
+                "INSERT INTO exams_manual (id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 row
             )
 
@@ -1028,6 +1231,15 @@ def admin_state():
     except Exception:
         vacations = []
 
+    exams_manual = []
+    try:
+        cur = get_db().execute(
+            "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note FROM exams_manual ORDER BY date, start_time"
+        )
+        exams_manual = [_row_to_manual_exam(dict(r)) for r in cur.fetchall()]
+    except Exception:
+        exams_manual = []
+
     settings_payload = {key: _get_setting(key, default) for key, default in SETTINGS_DEFAULTS.items()}
 
     return _no_store(jsonify({
@@ -1040,7 +1252,8 @@ def admin_state():
         "unmapped_rooms": unmapped_rm,
         "users": user_rows,
         "vacations": vacations,
-        "settings": settings_payload
+        "settings": settings_payload,
+        "exams_manual": exams_manual,
     }))
 
 @app.route("/api/admin/save", methods=["POST"])
@@ -1141,6 +1354,55 @@ def admin_delete_vacation(vac_id: int):
     if cur.rowcount == 0:
         return _no_store(jsonify({"ok": False, "error": "not_found"})), 404
     return _no_store(jsonify({"ok": True, "deleted": vac_id}))
+
+
+@app.route("/api/admin/exams", methods=["GET", "POST"])
+def admin_exams():
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    db = get_db()
+    if request.method == "GET":
+        rows = db.execute(
+            "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note FROM exams_manual ORDER BY date, start_time"
+        ).fetchall()
+        items = [_row_to_manual_exam(dict(r)) for r in rows]
+        return _no_store(jsonify({"ok": True, "exams": items}))
+
+    data = request.get_json(silent=True) or {}
+    payload = _normalize_manual_exam_input(data)
+    if not payload:
+        return jsonify({"ok": False, "error": "invalid_input"}), 400
+    db.execute(
+        """
+        INSERT INTO exams_manual (subject, name, date, start_time, end_time, classes_json, teachers_json, room, note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["subject"],
+            payload["name"],
+            payload["date"],
+            payload["start_time"],
+            payload["end_time"],
+            json.dumps(payload["classes"]),
+            json.dumps(payload["teachers"]),
+            payload["room"],
+            payload["note"],
+        )
+    )
+    db.commit()
+    return _no_store(jsonify({"ok": True}))
+
+
+@app.route("/api/admin/exams/<int:exam_id>", methods=["DELETE"])
+def admin_delete_exam(exam_id: int):
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    db = get_db()
+    cur = db.execute("DELETE FROM exams_manual WHERE id = ?", (exam_id,))
+    db.commit()
+    if cur.rowcount == 0:
+        return _no_store(jsonify({"ok": False, "error": "not_found"})), 404
+    return _no_store(jsonify({"ok": True, "deleted": exam_id}))
 
 if __name__ == "__main__":
     debug_enabled = str(os.environ.get("FLASK_DEBUG", "")).lower() in ("1", "true", "yes")
