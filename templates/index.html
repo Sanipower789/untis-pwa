@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mein Stundenplan</title>
 
-  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=29">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=30">
   <meta name="theme-color" content="#6a1b9a" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=29">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=30">
 </head>
 <body>
 
@@ -116,6 +116,10 @@
             <button type="button" id="colorSubjectSave">Speichern</button>
             <button type="button" id="colorSubjectClear" class="plain">Entfernen</button>
           </div>
+          <div class="palette">
+            <div class="palette-label">Beliebte Palette</div>
+            <div id="paletteSwatches" class="palette-swatches"></div>
+          </div>
           <div id="colorSubjectList" class="color-subject-list"></div>
         </div>
       </details>
@@ -188,10 +192,10 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='app.js') }}?v=29"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=30"></script>
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=29");
+      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=30");
     }
   </script>
 </body>

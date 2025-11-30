@@ -111,7 +111,11 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   z-index: 1;
 }
 
-.lesson.entfaellt{background:#b71c1c}
+.lesson.entfaellt{
+  background:var(--lesson-bg,#23252d);
+  color:var(--lesson-text,#fff);
+  box-shadow:0 0 0 2px #d32f2f inset;
+}
 .lesson.vertretung{background:#f57c00}
 .lesson.aenderung{background:#1e88e5}
 
@@ -296,6 +300,31 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 }
 .color-subject-list{
   display:grid; gap:8px; margin-top:8px;
+}
+.palette{
+  margin:8px 0;
+  display:grid;
+  gap:6px;
+}
+.palette-label{
+  font-weight:700;
+  color:#d8dbe2;
+}
+.palette-swatches{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+}
+.palette-swatch{
+  width:32px; height:22px;
+  border-radius:8px;
+  border:1px solid #2f3340;
+  cursor:pointer;
+  box-shadow:0 0 0 1px rgba(255,255,255,.04) inset;
+}
+.palette-swatch:focus-visible{
+  outline:2px solid #3f86ff;
+  outline-offset:2px;
 }
 .color-chip{
   display:flex; align-items:center; justify-content:space-between; gap:10px;

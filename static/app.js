@@ -483,6 +483,12 @@ const applyThemeVars = (theme) => {
   }
 };
 
+const DESIGN_SWATCHES = [
+  "#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444",
+  "#ec4899", "#6366f1", "#14b8a6", "#8b5cf6", "#f97316",
+  "#475569", "#06b6d4", "#22c55e", "#eab308", "#fb7185"
+];
+
 const ColorPrefs = {
   load() {
     let raw = {};
@@ -1061,6 +1067,8 @@ const btnColorSubjectClear= document.getElementById('colorSubjectClear');
 
 const listColorSubjects   = document.getElementById('colorSubjectList');
 
+const elPaletteSwatches   = document.getElementById('paletteSwatches');
+
 
 
 const overlayRoot   = document.getElementById('lesson-overlay');
@@ -1103,6 +1111,15 @@ function activateSidebarPanel(panelEl, navEl) {
 
 }
 
+function getSelectedCourseKeys() {
+  try {
+    const { keys } = normaliseCourseSelection(Array.isArray(getCourses()) ? getCourses() : []);
+    return new Set(keys);
+  } catch (_) {
+    return new Set();
+  }
+}
+
 
 
 function subjectOptionsForColors(prefs) {
@@ -1111,32 +1128,19 @@ function subjectOptionsForColors(prefs) {
 
   const prefObj = prefs || ColorPrefs.load();
 
-  Object.keys(prefObj.subjects || {}).forEach((key) => {
-
-    map.set(key, COURSE_LABEL_BY_KEY.get(key) || key);
-
-  });
-
-  COURSE_OPTIONS.forEach(opt => {
-
-    if (opt?.key) map.set(opt.key, opt.label || opt.key);
-
-  });
-
-  (window.__latestLessons || []).forEach(l => {
-
-    const subj = mapSubject(l);
-
-    const key = resolveCourseKey(subj) || normKey(subj || "");
-
+  getSelectedCourseKeys().forEach(key => {
     if (!key) return;
+    map.set(key, COURSE_LABEL_BY_KEY.get(key) || key);
+  });
 
-    map.set(key, subj || key);
-
+  Object.keys(prefObj.subjects || {}).forEach((key) => {
+    if (!map.has(key)) map.set(key, COURSE_LABEL_BY_KEY.get(key) || key);
   });
 
   return Array.from(map.entries())
+
     .map(([key, label]) => ({ key, label }))
+
     .sort((a, b) => a.label.localeCompare(b.label, 'de'));
 
 }
@@ -1175,7 +1179,9 @@ function renderSubjectColorList(prefObj) {
 
   const prefs = prefObj || ColorPrefs.load();
 
-  const entries = Object.entries(prefs.subjects || {});
+  const selected = getSelectedCourseKeys();
+
+  const entries = Object.entries(prefs.subjects || {}).filter(([key]) => !selected.size || selected.has(key));
 
   listColorSubjects.innerHTML = '';
 
@@ -1229,7 +1235,27 @@ function renderSubjectColorList(prefObj) {
 
 }
 
-
+function renderPaletteSwatches() {
+  if (!elPaletteSwatches) return;
+  elPaletteSwatches.innerHTML = "";
+  DESIGN_SWATCHES.forEach(color => {
+    const sw = document.createElement("button");
+    sw.type = "button";
+    sw.className = "palette-swatch";
+    sw.style.background = color;
+    sw.title = color;
+    sw.addEventListener("click", () => {
+      if (inpColorSubject) inpColorSubject.value = color;
+      const key = selColorSubject?.value || "";
+      if (key) {
+        ColorPrefs.setSubjectColor(key, color);
+        syncColorInputs(ColorPrefs.load());
+        rebuildGridNow();
+      }
+    });
+    elPaletteSwatches.appendChild(sw);
+  });
+}
 
 function syncColorInputs(prefObj) {
 
@@ -1254,6 +1280,8 @@ function syncColorInputs(prefObj) {
   if (inpColorSubject) inpColorSubject.value = selectedColor || DEFAULT_THEME.lessonBg;
 
   renderSubjectColorList(prefs);
+
+  renderPaletteSwatches();
 
 }
 
