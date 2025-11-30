@@ -36,18 +36,28 @@ def save_last_good(payload):
 load_last_good()
 
 # ---- Untis client (your existing implementation) ----
-from untis_client import fetch_week
+from untis_client import (
+    fetch_week,
+    fetch_exams,
+    fetch_subject_map,
+    fetch_class_map,
+    fetch_teacher_map,
+)
 
 APP_TZ = ZoneInfo("Europe/Berlin")
 ROOT   = os.path.dirname(os.path.abspath(__file__))
 DATA   = ROOT  # keep mappings & seen files in project root
 
+
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(24))
-ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN", "KukuSabzi")
+ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN")
 DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
 SETTINGS_DEFAULTS  = {"timeColumnWidth": "60"}
-BACKUP_VERSION     = 1
+BACKUP_VERSION     = 2
+
+if not ADMIN_TOKEN:
+    raise RuntimeError("ADMIN_TOKEN environment variable is required and must not be empty.")
 
 def _ensure_db_path() -> None:
     """Make sure DB directory exists and is writable (SQLite only)."""
@@ -143,7 +153,7 @@ def _load_user(user_id):
     return cur.fetchone()
 
 def _empty_profile():
-    return {"name": "", "courses": [], "klausuren": []}
+    return {"name": "", "courses": [], "klausuren": [], "colors": {"theme": {}, "subjects": {}}}
 
 def _normalise_courses(value):
     if not isinstance(value, list):
@@ -184,6 +194,39 @@ def _normalise_klausuren(items):
         cleaned.append(entry)
     return cleaned
 
+def _clean_hex_color(value: str | None) -> str | None:
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    if not s.startswith("#"):
+        s = "#" + s
+    if not re.fullmatch(r"#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?", s):
+        return None
+    if len(s) == 4:
+        s = "#" + "".join([ch * 2 for ch in s[1:]])
+    return s.lower()
+
+def _normalise_colors(block):
+    norm = {"theme": {}, "subjects": {}}
+    if not isinstance(block, dict):
+        return norm
+    theme_raw = block.get("theme") or {}
+    if isinstance(theme_raw, dict):
+        for key in ("lessonBg", "lessonText", "lessonBorder", "grid", "gridBg", "brand", "klausurBg", "klausurBorder"):
+            col = _clean_hex_color(theme_raw.get(key))
+            if col:
+                norm["theme"][key] = col
+    subjects_raw = block.get("subjects") or {}
+    if isinstance(subjects_raw, dict):
+        for raw_key, col in subjects_raw.items():
+            nk = norm_key(raw_key)
+            cleaned = _clean_hex_color(col)
+            if nk and cleaned:
+                norm["subjects"][nk] = cleaned
+    return norm
+
 def _normalise_profile(payload):
     if not isinstance(payload, dict):
         payload = {}
@@ -191,6 +234,7 @@ def _normalise_profile(payload):
     profile["name"] = str(payload.get("name") or "").strip()
     profile["courses"] = _normalise_courses(payload.get("courses"))
     profile["klausuren"] = _normalise_klausuren(payload.get("klausuren"))
+    profile["colors"] = _normalise_colors(payload.get("colors"))
     return profile
 
 def _load_profile_for_user(row):
@@ -243,6 +287,21 @@ def _save_profile(user_id, profile):
 
 def _parse_iso_date(value: str) -> date:
     return datetime.strptime(value, "%Y-%m-%d").date()
+
+# ---- Exams helpers ----
+def _date_int_to_iso(n) -> str:
+    try:
+        s = str(int(n)).zfill(8)
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    except Exception:
+        return str(n or "")
+
+def _hm_from_int(n) -> str:
+    try:
+        n = int(n)
+        return f"{n // 100:02d}:{n % 100:02d}"
+    except Exception:
+        return ""
 
 # ---------- Normalisation (canonical across app) ----------
 _UML = str.maketrans({"ä":"a","ö":"o","ü":"u","Ä":"a","Ö":"o","Ü":"u"})
@@ -367,6 +426,13 @@ _last_weekkey_payload: dict[str, dict] = {}
 def _week_key(ws: date) -> str:
     return ws.isoformat()
 
+# ---------- Exams cache/throttle ----------
+_last_exam_key_ts: dict[str, float] = {}
+_last_exam_payload: dict[str, dict] = {}
+
+def _exam_key(start: date, end: date, exam_type: int) -> str:
+    return f"{start.isoformat()}_{end.isoformat()}_{exam_type}"
+
 # ---------------- Routes ----------------
 @app.after_request
 def add_no_cache(resp):
@@ -469,6 +535,103 @@ def api_timetable():
     payload = {"ok": True, "weekStart": str(ws), "lessons": lessons, "settings": settings_payload}
     _last_weekkey_payload[weekkey] = payload
     _last_weekkey_ts[weekkey] = time.time()
+    return _no_store(jsonify(payload))
+
+@app.route("/api/exams")
+def api_exams():
+    today = datetime.now(APP_TZ).date()
+    start_raw = request.args.get("start")
+    end_raw   = request.args.get("end")
+    type_raw  = request.args.get("type") or request.args.get("examTypeId") or "0"
+    force     = request.args.get("force") == "1"
+
+    start = today
+    end   = today + timedelta(days=30)
+    if start_raw:
+        try:
+            start = _parse_iso_date(start_raw)
+        except ValueError:
+            return jsonify({"ok": False, "error": "invalid_start_date"}), 400
+    if end_raw:
+        try:
+            end = _parse_iso_date(end_raw)
+        except ValueError:
+            return jsonify({"ok": False, "error": "invalid_end_date"}), 400
+    if end < start:
+        start, end = end, start
+
+    try:
+        exam_type = int(type_raw)
+    except (TypeError, ValueError):
+        exam_type = 0
+
+    cache_key = _exam_key(start, end, exam_type)
+    now_ts = time.time()
+    if not force and cache_key in _last_exam_payload and (now_ts - _last_exam_key_ts.get(cache_key, 0)) < 15:
+        return _no_store(jsonify(_last_exam_payload[cache_key]))
+
+    try:
+        raw_exams = fetch_exams(start, end, exam_type) or []
+        subjects  = fetch_subject_map()
+        classes   = fetch_class_map()
+        teachers  = fetch_teacher_map()
+    except Exception as e:
+        msg = str(e)
+        err_code = "exam_fetch_failed"
+        if "no right" in msg.lower() or "-8509" in msg:
+            err_code = "exam_permission_denied"
+        payload = {
+            "ok": False,
+            "error": msg,
+            "errorCode": err_code,
+            "start": str(start),
+            "end": str(end),
+            "examType": exam_type,
+            "exams": [],
+        }
+        app.logger.warning("fetch_exams failed: %s", msg)
+        _last_exam_payload[cache_key] = payload
+        _last_exam_key_ts[cache_key] = time.time()
+        return _no_store(jsonify(payload))
+
+    def _norm_exam(rec):
+        if not isinstance(rec, dict):
+            return None
+        eid = rec.get("id")
+        date_iso = _date_int_to_iso(rec.get("date"))
+        start_hm = rec.get("start") or rec.get("startTime")
+        end_hm   = rec.get("end") or rec.get("endTime")
+        start_hm = start_hm if isinstance(start_hm, str) and ":" in start_hm else _hm_from_int(start_hm)
+        end_hm   = end_hm if isinstance(end_hm, str) and ":" in end_hm else _hm_from_int(end_hm)
+        subj_id = rec.get("subject")
+        subj_name = rec.get("subjectName") or subjects.get(subj_id, "")
+        class_ids = rec.get("classes") or []
+        teach_ids = rec.get("teachers") or []
+        return {
+            "id": eid,
+            "date": date_iso,
+            "start": start_hm,
+            "end": end_hm,
+            "subject": subj_name,
+            "subjectId": subj_id,
+            "classIds": class_ids,
+            "classes": [classes.get(cid, "") for cid in class_ids if cid],
+            "teacherIds": teach_ids,
+            "teachers": [teachers.get(tid, "") for tid in teach_ids if tid],
+        }
+
+    exams = [_norm_exam(rec) for rec in raw_exams]
+    exams = [e for e in exams if e and e.get("date")]
+
+    payload = {
+        "ok": True,
+        "start": str(start),
+        "end": str(end),
+        "examType": exam_type,
+        "exams": exams,
+    }
+    _last_exam_payload[cache_key] = payload
+    _last_exam_key_ts[cache_key] = time.time()
     return _no_store(jsonify(payload))
 
 @app.route("/api/vacations")
@@ -666,22 +829,14 @@ def _apply_backup_payload(payload: dict) -> None:
     if not isinstance(payload, dict):
         raise ValueError("backup_payload_invalid")
 
-    db_section = payload.get("database") or {}
-    mappings_section = payload.get("mappings") or {}
-    seen_section = payload.get("seen") or {}
-    if not isinstance(db_section, dict):
-        db_section = {}
-    if not isinstance(mappings_section, dict):
-        mappings_section = {}
-    if not isinstance(seen_section, dict):
-        seen_section = {}
+    db_section = payload.get("database")
+    mappings_section = payload.get("mappings")
+    seen_section = payload.get("seen")
+    if not isinstance(db_section, dict) or not isinstance(mappings_section, dict) or not isinstance(seen_section, dict):
+        raise ValueError("backup_payload_invalid")
 
-    db = get_db()
-    db.execute("DELETE FROM users")
-    db.execute("DELETE FROM vacations")
-    db.execute("DELETE FROM settings")
-    db.commit()
-
+    # ---- Pre-validate and normalise before touching the DB ----
+    users_norm = []
     users = db_section.get("users") or []
     if isinstance(users, list):
         for entry in users:
@@ -706,11 +861,9 @@ def _apply_backup_payload(payload: dict) -> None:
                 profile = _empty_profile()
             profile_json = json.dumps(_normalise_profile(profile))
             created_at = entry.get("created_at") or datetime.utcnow().isoformat()
-            db.execute(
-                "INSERT INTO users (id, username, password_hash, password_plain, profile_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, username, entry.get("password_hash") or "", entry.get("password_plain"), profile_json, created_at)
-            )
+            users_norm.append((user_id, username, entry.get("password_hash") or "", entry.get("password_plain"), profile_json, created_at))
 
+    vacations_norm = []
     vacations = db_section.get("vacations") or []
     if isinstance(vacations, list):
         for entry in vacations:
@@ -726,10 +879,7 @@ def _apply_backup_payload(payload: dict) -> None:
             except (TypeError, ValueError):
                 vac_id = None
             created_at = entry.get("created_at") or datetime.utcnow().isoformat()
-            db.execute(
-                "INSERT INTO vacations (id, title, start_date, end_date, created_at) VALUES (?, ?, ?, ?, ?)",
-                (vac_id, title, start_date, end_date, created_at)
-            )
+            vacations_norm.append((vac_id, title, start_date, end_date, created_at))
 
     settings_in = db_section.get("settings") if isinstance(db_section, dict) else {}
     settings_payload = SETTINGS_DEFAULTS.copy()
@@ -737,26 +887,65 @@ def _apply_backup_payload(payload: dict) -> None:
         for key, value in settings_in.items():
             if key in SETTINGS_DEFAULTS:
                 settings_payload[key] = str(value)
-    _set_settings(settings_payload)
 
+    courses_map = {}
     courses = mappings_section.get("courses")
     if isinstance(courses, dict):
-        _write_mapping_txt(COURSE_MAP_PATH, {norm_key(k): (v or "").strip() for k, v in courses.items()})
+        for k, v in courses.items():
+            nk = norm_key(k)
+            courses_map[nk] = (v or "").strip()
+
+    rooms_map = {}
     rooms = mappings_section.get("rooms")
     if isinstance(rooms, dict):
-        _write_mapping_txt(ROOM_MAP_PATH, {norm_key(k): (v or "").strip() for k, v in rooms.items()})
+        for k, v in rooms.items():
+            nk = norm_key(k)
+            rooms_map[nk] = (v or "").strip()
+
+    subs_raw = seen_section.get("subjects_raw") if isinstance(seen_section, dict) else []
+    rooms_raw = seen_section.get("rooms_raw") if isinstance(seen_section, dict) else []
+    subs_norm = sorted({str(s or "").strip() for s in subs_raw if str(s or "").strip()}) if isinstance(subs_raw, list) else []
+    rooms_norm = sorted({str(r or "").strip() for r in rooms_raw if str(r or "").strip()}) if isinstance(rooms_raw, list) else []
+
+    db = get_db()
+    try:
+        db.execute("BEGIN")
+        db.execute("DELETE FROM users")
+        db.execute("DELETE FROM vacations")
+        db.execute("DELETE FROM settings")
+
+        for row in users_norm:
+            db.execute(
+                "INSERT INTO users (id, username, password_hash, password_plain, profile_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                row
+            )
+
+        for row in vacations_norm:
+            db.execute(
+                "INSERT INTO vacations (id, title, start_date, end_date, created_at) VALUES (?, ?, ?, ?, ?)",
+                row
+            )
+
+        for key, value in settings_payload.items():
+            db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                (key, str(value))
+            )
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    _write_mapping_txt(COURSE_MAP_PATH, courses_map)
+    _write_mapping_txt(ROOM_MAP_PATH, rooms_map)
 
     global SEEN_SUBJECTS_RAW, SEEN_ROOMS_RAW, _last_seen_flush
-    subs_raw = seen_section.get("subjects_raw")
-    if isinstance(subs_raw, list):
-        SEEN_SUBJECTS_RAW = sorted({str(s or "").strip() for s in subs_raw if str(s or "").strip()})
-        _save_seen_raw(SEEN_SUB_RAW_PATH, SEEN_SUBJECTS_RAW)
-    rooms_raw = seen_section.get("rooms_raw")
-    if isinstance(rooms_raw, list):
-        SEEN_ROOMS_RAW = sorted({str(r or "").strip() for r in rooms_raw if str(r or "").strip()})
-        _save_seen_raw(SEEN_ROOM_RAW_PATH, SEEN_ROOMS_RAW)
+    SEEN_SUBJECTS_RAW = subs_norm
+    SEEN_ROOMS_RAW = rooms_norm
+    _save_seen_raw(SEEN_SUB_RAW_PATH, SEEN_SUBJECTS_RAW)
+    _save_seen_raw(SEEN_ROOM_RAW_PATH, SEEN_ROOMS_RAW)
     _last_seen_flush = time.time()
-    db.commit()
 
 
 @app.route("/api/admin/backup")
@@ -954,4 +1143,10 @@ def admin_delete_vacation(vac_id: int):
     return _no_store(jsonify({"ok": True, "deleted": vac_id}))
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    debug_enabled = str(os.environ.get("FLASK_DEBUG", "")).lower() in ("1", "true", "yes")
+    host = os.environ.get("FLASK_HOST", "0.0.0.0")
+    try:
+        port = int(os.environ.get("PORT", "5000"))
+    except (TypeError, ValueError):
+        port = 5000
+    app.run(host=host, port=port, debug=debug_enabled)

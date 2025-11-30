@@ -198,3 +198,48 @@ def fetch_week(week_start: date):
         )
 
     return lessons
+
+
+# ---------------- Exams ----------------
+def fetch_exams(start_date: date, end_date: date, exam_type_id: int = 0):
+    """
+    Fetch exams in a date range.
+
+    WebUntis expects YYYYMMDD ints and an optional examTypeId (0 = all types).
+    """
+    payload = {
+        "startDate": _yyyymmdd(start_date),
+        "endDate": _yyyymmdd(end_date),
+        "examTypeId": int(exam_type_id),
+    }
+    return _rpc_auth("getExams", payload)
+
+
+def fetch_subject_map() -> dict[int, str]:
+    try:
+        return {
+            s["id"]: (s.get("longName") or s.get("name") or "")
+            for s in _rpc_auth("getSubjects", {})
+        }
+    except Exception:
+        return {}
+
+
+def fetch_class_map() -> dict[int, str]:
+    try:
+        return {
+            c["id"]: (c.get("longName") or c.get("name") or "")
+            for c in _rpc_auth("getKlassen", {})
+        }
+    except Exception:
+        return {}
+
+
+def fetch_teacher_map() -> dict[int, str]:
+    try:
+        return {
+            t["id"]: (t.get("longName") or t.get("name") or "")
+            for t in _rpc_auth("getTeachers", {})
+        }
+    except Exception:
+        return {}

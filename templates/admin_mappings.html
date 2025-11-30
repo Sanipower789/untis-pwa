@@ -172,14 +172,22 @@ const fmtDate = (iso) => {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("de-DE");
 };
 
+const escapeHtml = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c] || c));
+
 function rowHTML(nk, variants, currentValue, isMapped){
+  const safeNk = escapeHtml(nk || "-");
+  const variantsHtml = (variants || []).map(v => `<span>${escapeHtml(v)}</span>`).join(", ");
+  const valueEscaped = escapeHtml(currentValue || "");
+  const placeholderEscaped = escapeHtml(isMapped ? "(gemappt)" : "Anzeigename");
   return `
     <tr class="${isMapped ? "muted" : ""}">
       <td class="key">
-        <code>${nk || "-"}</code>
-        <div class="variants">${variants.map(v => `<span>${v}</span>`).join(", ")}</div>
+        <code>${safeNk}</code>
+        <div class="variants">${variantsHtml}</div>
       </td>
-      <td><input class="map" data-nk="${nk}" value="${(currentValue||"").replace(/"/g,"&quot;")}" placeholder="${isMapped ? "(gemappt)" : "Anzeigename"}"></td>
+      <td><input class="map" data-nk="${safeNk}" value="${valueEscaped}" placeholder="${placeholderEscaped}"></td>
     </tr>
   `;
 }

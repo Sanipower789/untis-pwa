@@ -282,6 +282,104 @@ function vacationsOnDate(iso){
 }
 
 
+/* Exams (remote from WebUntis via backend) */
+const EXAM_FETCH_TTL = 30 * 1000;
+let EXAMS = [];
+let EXAMS_FETCHED_AT = 0;
+
+const toHM = (val) => {
+  if (val == null) return "";
+  if (typeof val === "string") {
+    if (val.includes(":")) return val;
+    const s = val.trim();
+    if (/^\d{3,4}$/.test(s)) return `${s.padStart(4, "0").slice(0,2)}:${s.padEnd(4, "0").slice(2)}`;
+    return s;
+  }
+  const n = Number(val);
+  if (!Number.isFinite(n)) return "";
+  const s = String(Math.round(n)).padStart(4, "0");
+  return `${s.slice(0,2)}:${s.slice(2)}`;
+};
+
+const dateIntToIso = (n) => {
+  if (!Number.isFinite(Number(n))) return String(n || "");
+  const s = String(Math.round(Number(n))).padStart(8, "0");
+  return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6)}`;
+};
+
+const inferPeriodFromTime = (hm) => {
+  if (!hm) return null;
+  const mins = parseHM(hm);
+  if (!Number.isFinite(mins)) return null;
+  let candidate = null;
+  for (const p of PERIOD_NUMBERS) {
+    const ps = periodStartMinutes(p);
+    const pe = periodEndMinutes(p);
+    if (!Number.isFinite(ps) || !Number.isFinite(pe)) continue;
+    if (mins >= ps && mins < pe) {
+      return p;
+    }
+    if (mins <= ps && candidate == null) {
+      candidate = p;
+    }
+  }
+  return candidate;
+};
+
+function normaliseExam(rec){
+  if (!rec || typeof rec !== "object") return null;
+  const date = rec.date ? String(rec.date) : dateIntToIso(rec.date);
+  const start = toHM(rec.start || rec.startTime);
+  const end   = toHM(rec.end || rec.endTime);
+  const subj  = String(rec.subject || rec.subjectName || "").trim();
+  const name  = String(rec.name || rec.title || subj || "Klausur").trim();
+  const periodStart = inferPeriodFromTime(start);
+  const periodEnd   = inferPeriodFromTime(end) || periodStart;
+  return {
+    id: rec.id != null ? `exam-${rec.id}` : uid(),
+    subject: subj || name,
+    name,
+    date,
+    periodStart,
+    periodEnd,
+    startTime: start,
+    endTime: end,
+    source: "remote",
+    classes: Array.isArray(rec.classes) ? rec.classes.filter(Boolean) : [],
+    teachers: Array.isArray(rec.teachers) ? rec.teachers.filter(Boolean) : []
+  };
+}
+
+async function loadExams(force = false){
+  const now = Date.now();
+  if (!force && EXAMS_FETCHED_AT && (now - EXAMS_FETCHED_AT) < EXAM_FETCH_TTL){
+    return EXAMS;
+  }
+  try {
+    const res = await fetch(`/api/exams?ts=${now}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(res.statusText || "exams fetch failed");
+    const data = await res.json();
+    if (data && data.ok === false){
+      console.warn("Exams fetch returned error:", data.error || data.errorCode || data);
+      EXAMS = [];
+      EXAMS_FETCHED_AT = now;
+      return EXAMS;
+    }
+    if (data && Array.isArray(data.exams)){
+      EXAMS = data.exams.map(normaliseExam).filter(Boolean);
+      EXAMS.sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        return (a.periodStart || 0) - (b.periodStart || 0);
+      });
+      EXAMS_FETCHED_AT = now;
+    }
+  } catch (err) {
+    console.warn("Exams fetch failed:", err);
+  }
+  return EXAMS;
+}
+
+
 
 /* Strong canonical normaliser (umlauts, (), dashes, tags, spaces) */
 
@@ -298,6 +396,163 @@ const normKey = (s) => {
         .replace(/["'\u00b4`]+/g, " ")
         .replace(/\b(gk|lk|ag)\b/g, " ");
   return s.replace(/\s+/g, " ").trim();
+};
+
+/* --- Colour preferences --- */
+const LS_COLORS = "timetable_colors_v1";
+const DEFAULT_THEME = {
+  lessonBg: "#23252d",
+  lessonBorder: "#3a4050",
+  lessonText: "#ffffff",
+  grid: "#333842",
+  gridBg: "#0f1014",
+  brand: "#6a1b9a",
+  klausurBg: "#2b3148",
+  klausurBorder: "#3e4a7a"
+};
+
+const HEX_RE = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
+const normaliseHex = (value) => {
+  const match = HEX_RE.exec(String(value || "").trim());
+  if (!match) return null;
+  let hex = match[1];
+  if (hex.length === 3) hex = hex.split("").map(ch => ch + ch).join("");
+  return "#" + hex.toLowerCase();
+};
+
+const mergeTheme = (rawTheme) => {
+  const out = {};
+  const source = typeof rawTheme === "object" && rawTheme ? rawTheme : {};
+  Object.keys(DEFAULT_THEME).forEach((key) => {
+    const col = normaliseHex(source[key]);
+    if (col) out[key] = col;
+  });
+  return out;
+};
+
+const mergeSubjects = (rawSubjects) => {
+  const out = {};
+  if (!rawSubjects || typeof rawSubjects !== "object") return out;
+  Object.entries(rawSubjects).forEach(([key, value]) => {
+    const nk = normKey(key);
+    const col = normaliseHex(value);
+    if (nk && col) out[nk] = col;
+  });
+  return out;
+};
+
+const shadeHex = (hex, percent) => {
+  const h = normaliseHex(hex);
+  if (!h) return null;
+  const num = parseInt(h.slice(1), 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  const amt = Math.max(-100, Math.min(100, percent));
+  const t = amt < 0 ? 0 : 255;
+  const p = Math.abs(amt) / 100;
+  const calc = (c) => Math.round((t - c) * p) + c;
+  return "#" + [calc(r), calc(g), calc(b)].map(v => v.toString(16).padStart(2, "0")).join("");
+};
+
+const textColorFor = (hex) => {
+  const h = normaliseHex(hex);
+  if (!h) return "#ffffff";
+  const num = parseInt(h.slice(1), 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.6 ? "#111111" : "#ffffff";
+};
+
+const applyThemeVars = (theme) => {
+  const merged = { ...DEFAULT_THEME, ...(theme || {}) };
+  const root = document.documentElement;
+  root.style.setProperty("--lesson-bg", merged.lessonBg);
+  root.style.setProperty("--lesson-border", merged.lessonBorder);
+  root.style.setProperty("--lesson-text", merged.lessonText);
+  root.style.setProperty("--grid", merged.grid);
+  root.style.setProperty("--grid-surface", merged.gridBg);
+  root.style.setProperty("--brand", merged.brand);
+  root.style.setProperty("--klausur-bg", merged.klausurBg);
+  root.style.setProperty("--klausur-border", merged.klausurBorder);
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) {
+    metaTheme.setAttribute("content", merged.brand || DEFAULT_THEME.brand);
+  }
+};
+
+const ColorPrefs = {
+  load() {
+    let raw = {};
+    try {
+      raw = JSON.parse(localStorage.getItem(LS_COLORS) || "{}") || {};
+    } catch (_) {
+      raw = {};
+    }
+    return {
+      theme: mergeTheme(raw.theme),
+      subjects: mergeSubjects(raw.subjects)
+    };
+  },
+  save(next, opts = {}) {
+    const safe = {
+      theme: mergeTheme(next?.theme),
+      subjects: mergeSubjects(next?.subjects)
+    };
+    try {
+      localStorage.setItem(LS_COLORS, JSON.stringify(safe));
+    } catch (_) {}
+    applyThemeVars(safe.theme);
+    if (!opts.silent) scheduleProfileSync();
+    return safe;
+  },
+  updateTheme(partial, opts = {}) {
+    const current = this.load();
+    current.theme = { ...current.theme, ...mergeTheme(partial) };
+    return this.save(current, opts);
+  },
+  setSubjectColor(key, color, opts = {}) {
+    const nk = normKey(key);
+    const col = normaliseHex(color);
+    if (!nk || !col) return this.load();
+    const current = this.load();
+    current.subjects[nk] = col;
+    return this.save(current, opts);
+  },
+  removeSubjectColor(key, opts = {}) {
+    const nk = normKey(key);
+    const current = this.load();
+    if (nk && current.subjects[nk]) {
+      delete current.subjects[nk];
+      return this.save(current, opts);
+    }
+    return current;
+  },
+  reset(opts = {}) {
+    return this.save({ theme: {}, subjects: {} }, opts);
+  }
+};
+
+applyThemeVars(ColorPrefs.load().theme);
+
+const applyCardColor = (cardEl, color) => {
+  if (!cardEl || !color) return;
+  const border = shadeHex(color, -12) || color;
+  const text = textColorFor(color);
+  cardEl.style.setProperty("--lesson-bg", color);
+  cardEl.style.setProperty("--lesson-border", border);
+  cardEl.style.setProperty("--lesson-text", text);
+  cardEl.style.setProperty("--klausur-bg", color);
+  cardEl.style.setProperty("--klausur-border", border);
+};
+
+const clearCardColor = (cardEl) => {
+  if (!cardEl) return;
+  ["--lesson-bg","--lesson-border","--lesson-text","--klausur-bg","--klausur-border"].forEach(prop => {
+    cardEl.style.removeProperty(prop);
+  });
 };
 
 /* --- Mapping dicts for timetable rendering (from /api/mappings) --- */
@@ -511,6 +766,36 @@ const KlausurenStore = {
   }
 
 };
+
+function mergeKlausuren(remoteList, localList){
+  const byKey = new Map();
+  const makeKey = (k) => {
+    const subj = normKey(k.subject || k.name || "");
+    const date = k.date || "";
+    const ps = Number.isFinite(k.periodStart) ? k.periodStart : "";
+    const pe = Number.isFinite(k.periodEnd) ? k.periodEnd : ps;
+    return `${date}|${ps}|${pe}|${subj}`;
+  };
+  (remoteList || []).forEach(k => {
+    const key = makeKey(k);
+    byKey.set(key, { ...k, source: k.source || "remote" });
+  });
+  (localList || []).forEach(k => {
+    const key = makeKey(k);
+    if (!byKey.has(key)) byKey.set(key, k);
+  });
+  return Array.from(byKey.values());
+}
+
+function getAllKlausuren(){
+
+  const remote = Array.isArray(EXAMS) ? EXAMS : [];
+
+  const local = KlausurenStore.load();
+
+  return mergeKlausuren(remote, local);
+
+}
 
 const uid = () => Math.random().toString(36).slice(2,10);
 
@@ -734,7 +1019,11 @@ const btnSidebarClose= document.getElementById('sidebarClose');
 
 const navKlausuren   = document.getElementById('navKlausuren');
 
+const navColors      = document.getElementById('navColors');
+
 const panelKlausuren = document.getElementById('panelKlausuren');
+
+const panelColors    = document.getElementById('panelColors');
 
 const formKlausur    = document.getElementById('klausurForm');
 
@@ -752,6 +1041,26 @@ const btnKlausurReset= document.getElementById('klausurReset');
 
 const listKlausuren  = document.getElementById('klausurList');
 
+const inpColorLesson = document.getElementById('colorLessonBg');
+
+const inpColorGrid   = document.getElementById('colorGridBg');
+
+const inpColorKlausur= document.getElementById('colorKlausurBg');
+
+const inpColorBrand  = document.getElementById('colorBrand');
+
+const btnColorReset  = document.getElementById('colorReset');
+
+const selColorSubject= document.getElementById('colorSubjectSelect');
+
+const inpColorSubject= document.getElementById('colorSubjectValue');
+
+const btnColorSubjectSave = document.getElementById('colorSubjectSave');
+
+const btnColorSubjectClear= document.getElementById('colorSubjectClear');
+
+const listColorSubjects   = document.getElementById('colorSubjectList');
+
 
 
 const overlayRoot   = document.getElementById('lesson-overlay');
@@ -766,7 +1075,11 @@ const overlayNote   = document.getElementById('lesson-overlay-note');
 
 const overlayClose  = document.getElementById('lesson-overlay-close');
 
-
+const rebuildGridNow = () => {
+  if (window.__latestLessons) {
+    buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys, window.__timeColumnWidth);
+  }
+};
 
 function sidebarShow(){ elSidebar.classList.add('show'); }
 
@@ -778,15 +1091,177 @@ btnSidebarClose?.addEventListener('click', sidebarHide);
 
 
 
-function showKlausurenPanel() {
+function activateSidebarPanel(panelEl, navEl) {
 
   document.querySelectorAll('.sidebar-link').forEach(b=>b.classList.remove('active'));
 
-  navKlausuren?.classList.add('active');
+  if (navEl) navEl.classList.add('active');
 
   document.querySelectorAll('.sidebar-panel').forEach(p=>p.style.display='none');
 
-  if (panelKlausuren) panelKlausuren.style.display='block';
+  if (panelEl) panelEl.style.display='block';
+
+}
+
+
+
+function subjectOptionsForColors(prefs) {
+
+  const map = new Map();
+
+  const prefObj = prefs || ColorPrefs.load();
+
+  Object.keys(prefObj.subjects || {}).forEach((key) => {
+
+    map.set(key, COURSE_LABEL_BY_KEY.get(key) || key);
+
+  });
+
+  COURSE_OPTIONS.forEach(opt => {
+
+    if (opt?.key) map.set(opt.key, opt.label || opt.key);
+
+  });
+
+  (window.__latestLessons || []).forEach(l => {
+
+    const subj = mapSubject(l);
+
+    const key = resolveCourseKey(subj) || normKey(subj || "");
+
+    if (!key) return;
+
+    map.set(key, subj || key);
+
+  });
+
+  return Array.from(map.entries())
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'de'));
+
+}
+
+
+
+function populateColorSubjectsSelect(currentValue = "", prefs) {
+
+  if (!selColorSubject) return;
+
+  const options = subjectOptionsForColors(prefs);
+
+  if (!options.length) {
+
+    selColorSubject.innerHTML = '<option value="">Keine Faecher verfuegbar</option>';
+
+    return;
+
+  }
+
+  selColorSubject.innerHTML = options.map(opt => `<option value="${escapeHtml(opt.key)}">${escapeHtml(opt.label)}</option>`).join('');
+
+  if (currentValue && options.find(o => o.key === currentValue)) {
+
+    selColorSubject.value = currentValue;
+
+  }
+
+}
+
+
+
+function renderSubjectColorList(prefObj) {
+
+  if (!listColorSubjects) return;
+
+  const prefs = prefObj || ColorPrefs.load();
+
+  const entries = Object.entries(prefs.subjects || {});
+
+  listColorSubjects.innerHTML = '';
+
+  if (!entries.length) {
+
+    listColorSubjects.innerHTML = '<div class="muted">Keine Fachfarben gespeichert.</div>';
+
+    return;
+
+  }
+
+  entries.sort((a, b) => {
+
+    const la = COURSE_LABEL_BY_KEY.get(a[0]) || a[0];
+
+    const lb = COURSE_LABEL_BY_KEY.get(b[0]) || b[0];
+
+    return la.localeCompare(lb, 'de');
+
+  });
+
+  entries.forEach(([key, color]) => {
+
+    const chip = document.createElement('div');
+
+    chip.className = 'color-chip';
+
+    const label = COURSE_LABEL_BY_KEY.get(key) || key;
+
+    chip.innerHTML = `
+      <div class="chip-info">
+        <span class="chip-swatch" style="background:${escapeHtml(color)}"></span>
+        <div>
+          <div class="chip-label">${escapeHtml(label)}</div>
+          <div class="chip-key">${escapeHtml(key)}</div>
+        </div>
+      </div>
+      <button type="button" data-key="${escapeHtml(key)}">Entfernen</button>
+    `;
+    const btn = chip.querySelector('button');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        ColorPrefs.removeSubjectColor(key);
+        renderSubjectColorList();
+        populateColorSubjectsSelect(key);
+        rebuildGridNow();
+      });
+    }
+    listColorSubjects.appendChild(chip);
+  });
+
+}
+
+
+
+function syncColorInputs(prefObj) {
+
+  const prefs = prefObj || ColorPrefs.load();
+
+  const theme = { ...DEFAULT_THEME, ...(prefs.theme || {}) };
+
+  if (inpColorLesson) inpColorLesson.value = theme.lessonBg;
+
+  if (inpColorGrid) inpColorGrid.value = theme.gridBg;
+
+  if (inpColorKlausur) inpColorKlausur.value = theme.klausurBg;
+
+  if (inpColorBrand) inpColorBrand.value = theme.brand;
+
+  populateColorSubjectsSelect(selColorSubject?.value || "", prefs);
+
+  const selectedKey = selColorSubject?.value || "";
+
+  const selectedColor = (prefs.subjects || {})[selectedKey] || theme.lessonBg;
+
+  if (inpColorSubject) inpColorSubject.value = selectedColor || DEFAULT_THEME.lessonBg;
+
+  renderSubjectColorList(prefs);
+
+}
+
+
+
+function showKlausurenPanel() {
+
+  activateSidebarPanel(panelKlausuren, navKlausuren);
 
   const accordion = document.getElementById('klausurAccordion');
 
@@ -802,7 +1277,19 @@ function showKlausurenPanel() {
 
 
 
+function showColorsPanel() {
+
+  activateSidebarPanel(panelColors, navColors);
+
+  syncColorInputs();
+
+}
+
+
+
 navKlausuren?.addEventListener('click', showKlausurenPanel);
+
+navColors?.addEventListener('click', showColorsPanel);
 
 showKlausurenPanel();
 
@@ -980,7 +1467,7 @@ formKlausur?.addEventListener('submit', (e) => {
 
 function renderKlausurList() {
 
-  const data = KlausurenStore.load().sort((a,b)=>{
+  const data = getAllKlausuren().sort((a,b)=>{
 
     if (a.date!==b.date) return a.date.localeCompare(b.date);
 
@@ -1000,6 +1487,8 @@ function renderKlausurList() {
 
   data.forEach(k => {
 
+    const isRemote = k.source === "remote";
+    const periodLabel = formatPeriodRange(k.periodStart, k.periodEnd) || formatTimeRange(k.startTime, k.endTime);
     const el = document.createElement('div');
 
     el.className = 'klausur-item';
@@ -1010,29 +1499,82 @@ function renderKlausurList() {
 
         <strong>${escapeHtml(k.name)}</strong>
 
-        <small>${escapeHtml(k.subject)} - ${k.date}, ${escapeHtml(formatPeriodRange(k.periodStart, k.periodEnd))}</small>
+        <small>${escapeHtml(k.subject || "")} - ${k.date}, ${escapeHtml(periodLabel || "")}</small>
 
       </div>
 
-      <button data-id="${k.id}" title="Löschen">Löschen</button>
+      ${isRemote ? `<span class="muted">Schule</span>` : `<button data-id="${k.id}" title="Löschen">Löschen</button>`}
 
     `;
 
-    el.querySelector('button').addEventListener('click', () => {
+    if (!isRemote){
+      el.querySelector('button').addEventListener('click', () => {
 
-      KlausurenStore.remove(k.id);
+        KlausurenStore.remove(k.id);
 
-      renderKlausurList();
+        renderKlausurList();
 
-      if (window.__latestLessons) buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys, window.__timeColumnWidth);
+        if (window.__latestLessons) buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys, window.__timeColumnWidth);
 
-    });
+      });
+    }
 
     listKlausuren.appendChild(el);
 
   });
 
 }
+
+
+
+const handleThemeInput = (inputEl, key) => {
+  if (!inputEl) return;
+  inputEl.addEventListener('input', () => {
+    ColorPrefs.updateTheme({ [key]: inputEl.value });
+    syncColorInputs(ColorPrefs.load());
+    rebuildGridNow();
+  });
+};
+
+handleThemeInput(inpColorLesson, "lessonBg");
+handleThemeInput(inpColorGrid, "gridBg");
+handleThemeInput(inpColorKlausur, "klausurBg");
+handleThemeInput(inpColorBrand, "brand");
+
+btnColorReset?.addEventListener('click', () => {
+  const prefs = ColorPrefs.reset();
+  syncColorInputs(prefs);
+  rebuildGridNow();
+});
+
+selColorSubject?.addEventListener('change', () => {
+  const prefs = ColorPrefs.load();
+  const key = selColorSubject.value || "";
+  const nextColor = (prefs.subjects || {})[key] || (prefs.theme.lessonBg || DEFAULT_THEME.lessonBg);
+  if (inpColorSubject) inpColorSubject.value = nextColor;
+});
+
+btnColorSubjectSave?.addEventListener('click', () => {
+  if (!selColorSubject || !inpColorSubject) return;
+  const key = selColorSubject.value || "";
+  const color = inpColorSubject.value;
+  if (!key || !color) return;
+  ColorPrefs.setSubjectColor(key, color);
+  syncColorInputs(ColorPrefs.load());
+  rebuildGridNow();
+});
+
+btnColorSubjectClear?.addEventListener('click', () => {
+  if (!selColorSubject) return;
+  const key = selColorSubject.value || "";
+  if (!key) return;
+  ColorPrefs.removeSubjectColor(key);
+  syncColorInputs(ColorPrefs.load());
+  rebuildGridNow();
+});
+
+// ensure selects mirror stored values even before opening the tab
+syncColorInputs(ColorPrefs.load());
 
 
 
@@ -1215,7 +1757,9 @@ function showView(view) {
 
       courses: getCourses(),
 
-      klausuren: KlausurenStore.load()
+      klausuren: KlausurenStore.load(),
+
+      colors: ColorPrefs.load()
 
     };
 
@@ -1332,10 +1876,14 @@ function showView(view) {
     } catch {}
 
     pause(() => {
+      if (profile.colors && typeof profile.colors === "object") {
+        ColorPrefs.save(profile.colors, { silent: true });
+      }
       if (typeof profile.name === "string") setName(profile.name);
       if (Array.isArray(profile.courses)) setCourses(profile.courses);
       if (Array.isArray(profile.klausuren)) KlausurenStore.save(profile.klausuren);
     });
+    try { syncColorInputs(ColorPrefs.load()); } catch {}
     try {
       const storedCourses = Array.isArray(getCourses()) ? getCourses() : [];
       const { keys } = normaliseCourseSelection(storedCourses);
@@ -1932,6 +2480,16 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
 
 
+  const colorPrefs = ColorPrefs.load();
+
+  applyThemeVars(colorPrefs.theme);
+
+  const subjectColors = colorPrefs.subjects || {};
+
+  const themeColors = { ...DEFAULT_THEME, ...(colorPrefs.theme || {}) };
+
+
+
   // snapshot for sidebar dropdowns
 
   window.__latestLessons = lessons;
@@ -2016,7 +2574,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
   const valid = [];
 
-  const klausurenList = KlausurenStore.load().filter(k => isWithinWeek(k.date));
+  const klausurenList = getAllKlausuren().filter(k => isWithinWeek(k.date));
 
   const matchedKlausurIds = new Set();
 
@@ -2259,6 +2817,10 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
     const room = mapRoom(l);
 
+    const subjKey = resolveCourseKey(subj) || normKey(subj || "");
+
+    const subjColor = subjKey ? subjectColors[subjKey] : null;
+
 
 
     if (klausur) {
@@ -2304,24 +2866,23 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
       `;
 
       const meta = [
-
         { label: "Datum", value: datePretty },
-
         { label: "Zeitraum", value: `${periodLabel} (${formatTimeRange(startTime, endTime)})` }
-
       ];
-
       if (klausur.subject) meta.push({ label: "Fach", value: klausur.subject });
-
       card.addEventListener("click", () => showLessonOverlay({
-
         title: klausur.name || "Klausur",
-
-        subtitle: klausur.subject ? `${klausur.subject} · ${datePretty}` : datePretty,
-
+        subtitle: klausur.subject ? `${klausur.subject} - ${datePretty}` : datePretty,
         meta
-
       }));
+      const klausurColorKey = resolveCourseKey(klausur.subject || "") || subjKey;
+      const klausurColor = klausurColorKey ? subjectColors[klausurColorKey] : null;
+      if (klausurColor) {
+        applyCardColor(card, klausurColor);
+      } else {
+        clearCardColor(card);
+        if (themeColors.klausurBg) applyCardColor(card, themeColors.klausurBg);
+      }
 
     } else {
 
@@ -2366,16 +2927,16 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
       if (badge) meta.push({ label: "Status", value: badge });
 
       card.addEventListener("click", () => showLessonOverlay({
-
         title: subj || "Unterricht",
-
-        subtitle: timeRange ? `${datePretty} · ${timeRange}` : datePretty,
-
+        subtitle: timeRange ? `${datePretty} - ${timeRange}` : datePretty,
         meta,
-
         note: l.note || ""
-
       }));
+      if (subjColor) {
+        applyCardColor(card, subjColor);
+      } else {
+        clearCardColor(card);
+      }
 
     }
 
@@ -2458,14 +3019,17 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
   if (k.subject) meta.push({ label: "Fach", value: k.subject });
 
   card.addEventListener("click", () => showLessonOverlay({
-
     title: k.name || "Klausur",
-
-    subtitle: k.subject ? `${k.subject} · ${datePretty}` : datePretty,
-
+    subtitle: k.subject ? `${k.subject} - ${datePretty}` : datePretty,
     meta
-
   }));
+  const subjColor = examKey ? subjectColors[examKey] : null;
+  if (subjColor) {
+    applyCardColor(card, subjColor);
+  } else {
+    clearCardColor(card);
+    if (themeColors.klausurBg) applyCardColor(card, themeColors.klausurBg);
+  }
 
   grid.appendChild(card);
 
@@ -2562,6 +3126,7 @@ async function loadTimetable(force = false) {
   try {
 
     await loadVacations(force);
+    await loadExams(force);
 
     await loadMappings();
 

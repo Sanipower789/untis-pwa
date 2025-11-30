@@ -1,6 +1,8 @@
 :root{
   --bg:#0f0f10; --card:#1c1d22; --ink:#f2f3f5; --muted:#a7aab1;
-  --grid:#333842; --brand:#6a1b9a; --btn:#1976d2;
+  --grid:#333842; --grid-surface:#0f1014; --brand:#6a1b9a; --btn:#1976d2;
+  --lesson-bg:#23252d; --lesson-border:#3a4050; --lesson-text:#fff;
+  --klausur-bg:#2b3148; --klausur-border:#3e4a7a;
 
   --cell-margin:4px;
   --card-radius:10px;
@@ -64,7 +66,7 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   border:1px solid var(--grid);
   border-radius:12px;
   overflow:hidden;
-  background:#0f1014;
+  background:var(--grid-surface,#0f1014);
 }
 
 /* headers & separators */
@@ -81,14 +83,14 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   font-size:12px;line-height:1.2;
   display:flex;align-items:center;justify-content:center;
   border-right:1px solid var(--grid);
-  background:#0f1014;
+  background:var(--grid-surface,#0f1014);
   padding:0 4px;
 }
 
 /* empty cells (grid background) */
 .slot{
   border-right:1px solid var(--grid);
-  background:#0f1014;
+  background:var(--grid-surface,#0f1014);
   position: relative;
 }
 
@@ -98,8 +100,9 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   margin: var(--cell-margin);
   border-radius: var(--card-radius);
   padding: var(--card-pad);
-  background:#23252d; color:#fff;
-  box-shadow:0 0 0 1px #3a4050 inset;
+  background:var(--lesson-bg,#23252d);
+  color:var(--lesson-text,#fff);
+  box-shadow:0 0 0 1px var(--lesson-border,#3a4050) inset;
   display:flex; flex-direction:column; gap: var(--card-gap);
   font-size: var(--font-base); line-height:1.15;
   max-width: calc(100% - (var(--cell-margin) * 2));
@@ -114,8 +117,8 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 
 /* Klausur visual */
 .lesson.klausur{
-  background:#2b3148;
-  box-shadow:0 0 0 1px #3e4a7a inset, 0 0 0 2px rgba(62,74,122,.25);
+  background:var(--klausur-bg,#2b3148);
+  box-shadow:0 0 0 1px var(--klausur-border,#3e4a7a) inset, 0 0 0 2px rgba(62,74,122,.25);
   z-index: 5;
 }
 .lesson.klausur .lesson-title{display:flex;gap:6px;align-items:center}
@@ -247,7 +250,11 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 .sidebar.show{ transform:translateX(0); }
 .sidebar-header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
 .sidebar-nav{ display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
-.sidebar-link{ background:#222; border:1px solid #333; color:#fff; padding:6px 10px; border-radius:8px; }
+.sidebar-link{
+  background:#222; border:1px solid #333; color:#fff; padding:6px 10px; border-radius:8px;
+  cursor:pointer; font-weight:700;
+}
+.sidebar-link:focus-visible{outline:2px solid #3f86ff; outline-offset:2px;}
 .sidebar-link.active{ background:#2b2b2b; border-color:#444; }
 .sidebar-panel .form{ display:grid; gap:8px; }
 .sidebar .primary { background:#4a7; border:1px solid #4a7; color:#061; }
@@ -259,6 +266,48 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 }
 .klausur-item small{ opacity:.8; display:block; }
 .klausur-item button{ background:#2a2a2a; border:1px solid #444; color:#fff; border-radius:8px; padding:4px 8px; }
+.color-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));
+  gap:10px;
+}
+.color-field{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  background:#1b1b1f;
+  border:1px solid #2b3035;
+  border-radius:10px;
+  padding:8px 10px;
+}
+.color-field input[type="color"]{
+  width:48px; height:32px; padding:0; border:none; background:transparent; cursor:pointer;
+}
+.color-row{
+  display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+}
+.color-row select{
+  flex:1; min-width:180px;
+  background:#10121a; border:1px solid #2f3440; border-radius:8px; color:#f2f2f6; padding:8px;
+}
+.color-row input[type="color"]{
+  width:52px; height:36px; padding:0; border:1px solid #2f3440; border-radius:8px; background:#111;
+}
+.color-subject-list{
+  display:grid; gap:8px; margin-top:8px;
+}
+.color-chip{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  background:#1b1b1f; border:1px solid #2b3035; border-radius:10px; padding:8px 10px;
+}
+.color-chip .chip-info{ display:flex; align-items:center; gap:10px; min-width:0; }
+.color-chip .chip-label{ font-weight:700; }
+.color-chip .chip-key{ color:#9aa0ac; font-size:0.85rem; }
+.color-chip .chip-swatch{
+  width:40px; height:20px; border-radius:6px; border:1px solid #444; background:#333;
+}
+.color-chip button{ background:#2a2a2a; border:1px solid #444; color:#fff; border-radius:8px; padding:4px 8px; }
 
 .lesson-overlay{ position:fixed; inset:0; display:none; z-index:1000; }
 .lesson-overlay[aria-hidden="false"]{ display:block; }
