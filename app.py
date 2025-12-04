@@ -51,6 +51,12 @@ DATA   = ROOT  # keep mappings & seen files in project root
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(24))
+SESSION_LIFETIME_DAYS = os.environ.get("SESSION_LIFETIME_DAYS")
+try:
+    SESSION_LIFETIME_DAYS = int(SESSION_LIFETIME_DAYS) if SESSION_LIFETIME_DAYS else 90
+except Exception:
+    SESSION_LIFETIME_DAYS = 90
+app.permanent_session_lifetime = timedelta(days=SESSION_LIFETIME_DAYS)
 ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN")
 DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
 SETTINGS_DEFAULTS  = {"timeColumnWidth": "60"}
@@ -199,6 +205,16 @@ def _current_user_id():
         return int(user_id)
     except (TypeError, ValueError):
         return None
+
+
+@app.before_request
+def _keep_sessions_permanent():
+    """
+    Refresh logged-in sessions as "permanent" so the cookie survives browser restarts.
+    Flask will refresh the expiry on each request when SESSION_REFRESH_EACH_REQUEST is True.
+    """
+    if session.get("user_id") or session.get("admin_ok"):
+        session.permanent = True
 
 def _load_user(user_id):
     if not user_id:
@@ -882,6 +898,7 @@ def api_auth_register():
         db.commit()
     except sqlite3.IntegrityError:
         return jsonify({"ok": False, "error": "username_exists"}), 409
+    session.permanent = True
     session["user_id"] = new_id
     row = _load_user(new_id)
     return _no_store(jsonify(_auth_response(row))), 201
@@ -902,6 +919,7 @@ def api_auth_login():
         row = cur.fetchone()
     if not row or not check_password_hash(row["password_hash"], password):
         return jsonify({"ok": False, "error": "invalid_credentials"}), 401
+    session.permanent = True
     session["user_id"] = row["id"]
     return _no_store(jsonify(_auth_response(row)))
 
@@ -938,6 +956,7 @@ def admin_login():
     if request.method == "POST":
         token = request.form.get("token", "")
         if ADMIN_TOKEN and token == ADMIN_TOKEN:
+            session.permanent = True
             session["admin_ok"] = True
             return redirect(url_for("admin_mappings"))
         return render_template("admin_login.html", error="Falsches Passwort")
