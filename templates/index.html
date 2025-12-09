@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mein Stundenplan</title>
 
-  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=32">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=33">
   <meta name="theme-color" content="#6a1b9a" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=32">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=33">
 </head>
 <body>
 
@@ -38,6 +38,15 @@
       <button id="refresh-btn" title="Neu laden">🔄</button>
     </div>
   </header>
+
+  <!-- Update-Banner -->
+  <div id="update-banner" class="update-banner" role="status" aria-live="polite" style="display:none;">
+    <div class="update-banner__body">
+      <div class="update-banner__title">Neuigkeiten</div>
+      <div id="update-banner-text" class="update-banner__text"></div>
+    </div>
+    <button id="update-banner-close" class="plain update-banner__close" aria-label="Hinweis schließen">×</button>
+  </div>
 
   <!-- Slide-in Sidebar -->
   <aside id="sidebar" class="sidebar">
@@ -201,10 +210,10 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='app.js') }}?v=32"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=33"></script>
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=32");
+      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=33");
     }
   </script>
 </body>

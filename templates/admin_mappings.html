@@ -42,6 +42,8 @@
     .empty-row td{text-align:center;color:var(--muted);font-size:12px;padding:10px 0}
       label.stack{display:flex;flex-direction:column;gap:6px;font-size:13px;}
     .settings-row input[type=range]{width:100%;}
+    .settings-row textarea.banner-message{width:100%;min-height:90px;background:#1d1e23;border:1px solid #3a3f4a;color:#fff;border-radius:8px;padding:8px;resize:vertical;}
+    .settings-row .pill.inline{display:inline-flex;align-items:center;gap:8px;padding:4px 10px;}
 </style>
 </head>
 <body>
@@ -136,6 +138,12 @@
         <input type="range" id="timeColWidth" min="40" max="120" value="60">
         <span id="timeColWidthValue" class="muted">60 px</span>
       </label>
+      <label class="stack">
+        Update-Hinweis (Text wird einmalig je Gerät gezeigt)
+        <textarea id="bannerText" class="banner-message" placeholder="Kurze Info zum letzten Update"></textarea>
+      </label>
+      <label class="pill inline"><input type="checkbox" id="bannerEnabled"> Hinweis aktivieren</label>
+      <p class="muted small">Wird automatisch ausgeblendet, nachdem ein Nutzer den Hinweis geschlossen hat.</p>
       <div class="foot"><button id="save-settings">Speichern</button></div>
     </div>
   </div>
@@ -388,11 +396,18 @@ function renderExams(){
 function renderSettings(){
   const slider = document.getElementById("timeColWidth");
   const label = document.getElementById("timeColWidthValue");
+  const bannerText = document.getElementById("bannerText");
+  const bannerEnabled = document.getElementById("bannerEnabled");
   if (!slider || !label) return;
   const raw = state.settings?.timeColumnWidth ?? "60";
   const display = String(raw);
   slider.value = display;
   label.textContent = `${display} px`;
+  if (bannerText) bannerText.value = state.settings?.updateBannerText ?? "";
+  if (bannerEnabled) {
+    const enabledRaw = state.settings?.updateBannerEnabled ?? "0";
+    bannerEnabled.checked = String(enabledRaw).trim().toLowerCase() === "1" || String(enabledRaw).trim().toLowerCase() === "true";
+  }
 }
 
 async function save(kind){
@@ -537,12 +552,21 @@ if (saveSettingsBtn) {
     if (!sliderTimeCol) return;
     const raw = Number(sliderTimeCol.value);
     const width = Number.isFinite(raw) ? Math.min(120, Math.max(40, Math.round(raw))) : 70;
+    const bannerTextEl = document.getElementById("bannerText");
+    const bannerEnabledEl = document.getElementById("bannerEnabled");
+    const bannerText = bannerTextEl ? bannerTextEl.value.trim() : "";
+    const bannerEnabled = bannerEnabledEl ? bannerEnabledEl.checked : false;
+    const settingsPayload = {
+      timeColumnWidth: String(width),
+      updateBannerText: bannerText,
+      updateBannerEnabled: bannerEnabled ? "1" : "0",
+    };
     saveSettingsBtn.disabled = true;
     try {
       const res = await fetch("/api/admin/save", {
         method: "POST",
         headers: {"content-type":"application/json"},
-        body: JSON.stringify({ settings: { timeColumnWidth: String(width) } })
+        body: JSON.stringify({ settings: settingsPayload })
       });
       const j = await res.json().catch(()=>({}));
       if (j.ok) {

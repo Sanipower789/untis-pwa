@@ -102,6 +102,8 @@ const LS_COURSES = "myCourses";
 
 const LS_NAME    = "myName";
 
+const LS_UPDATE_BANNER = "update_banner_seen_v1";
+
 const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
 
 const setCourses = (arr) => {
@@ -356,10 +358,12 @@ const inferPeriodFromTime = (hm) => {
     const ps = periodStartMinutes(p);
     const pe = periodEndMinutes(p);
     if (!Number.isFinite(ps) || !Number.isFinite(pe)) continue;
-    if (mins >= ps && mins < pe) {
+    // Treat the period end as inclusive so an exam ending on the boundary
+    // still maps to that last lesson slot instead of spilling into the next one.
+    if (mins >= ps && mins <= pe) {
       return p;
     }
-    if (mins <= ps && candidate == null) {
+    if (mins < ps && candidate == null) {
       candidate = p;
     }
   }
@@ -368,11 +372,13 @@ const inferPeriodFromTime = (hm) => {
 
 function normaliseExam(rec){
   if (!rec || typeof rec !== "object") return null;
-  const date = rec.date ? String(rec.date) : dateIntToIso(rec.date);
+  const dateRaw = rec.date || rec.examDate;
+  const date = dateRaw ? String(dateRaw) : dateIntToIso(rec.date || rec.examDate);
   const start = toHM(rec.start || rec.startTime);
   const end   = toHM(rec.end || rec.endTime);
   const subj  = String(rec.subject || rec.subjectName || "").trim();
   const name  = String(rec.name || rec.title || subj || "Klausur").trim();
+  const note  = String(rec.note || rec.text || "").trim();
   const roomsRaw = [];
   if (Array.isArray(rec.rooms)) roomsRaw.push(...rec.rooms);
   if (rec.room) roomsRaw.push(...String(rec.room).split(","));
@@ -380,8 +386,10 @@ function normaliseExam(rec){
   const roomStr = roomsArr.join(", ");
   const periodStart = inferPeriodFromTime(start);
   const periodEnd   = inferPeriodFromTime(end) || periodStart;
+  const source = rec.source || "remote";
+  const baseId = rec.id;
   return {
-    id: rec.id != null ? `exam-${rec.id}` : uid(),
+    id: baseId != null ? `exam-${baseId}` : uid(),
     subject: subj || name,
     name,
     date,
@@ -391,7 +399,8 @@ function normaliseExam(rec){
     endTime: end,
     room: roomStr,
     rooms: roomsArr,
-    source: "remote",
+    note,
+    source,
     classes: Array.isArray(rec.classes) ? rec.classes.filter(Boolean) : [],
     teachers: Array.isArray(rec.teachers) ? rec.teachers.filter(Boolean) : []
   };
@@ -776,6 +785,40 @@ function mapExamRooms(exam){
     .filter(Boolean);
   const deduped = dedupeList(mapped);
   return { list: deduped, label: deduped.join(", ") };
+}
+
+/* --- Update banner (one-time dismiss) --- */
+let activeBannerVersion = null;
+
+function renderUpdateBanner(rawBanner){
+  const wrap = document.getElementById("update-banner");
+  const textEl = document.getElementById("update-banner-text");
+  const closeBtn = document.getElementById("update-banner-close");
+  if (!wrap || !textEl || !closeBtn) return;
+
+  if (!rawBanner || rawBanner.enabled === false || !rawBanner.message){
+    wrap.style.display = "none";
+    activeBannerVersion = null;
+    return;
+  }
+
+  const version = String(rawBanner.version || rawBanner.updatedAt || rawBanner.message || "").trim();
+  const seen = localStorage.getItem(LS_UPDATE_BANNER);
+  if (version && seen && seen === version){
+    wrap.style.display = "none";
+    activeBannerVersion = version;
+    return;
+  }
+
+  const safeHtml = escapeHtml(String(rawBanner.message || "")).replace(/\n/g, "<br>");
+  textEl.innerHTML = safeHtml;
+  activeBannerVersion = version || String(rawBanner.message || "");
+  wrap.style.display = "flex";
+
+  closeBtn.onclick = () => {
+    if (activeBannerVersion) localStorage.setItem(LS_UPDATE_BANNER, activeBannerVersion);
+    wrap.style.display = "none";
+  };
 }
 
 /* ================== KLAUSUREN (Local) ================== */
@@ -3350,6 +3393,9 @@ async function loadTimetable(force = false, weekStart = null) {
 
     const timeColumnWidth = Math.min(120, Math.max(40, Math.round(Number(window.__timeColumnWidth) || 60)));
     window.__timeColumnWidth = timeColumnWidth;
+
+    const bannerData = (data?.settings?.updateBanner) || data?.updateBanner;
+    renderUpdateBanner(bannerData);
 
 
 

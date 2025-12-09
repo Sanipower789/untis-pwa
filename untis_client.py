@@ -16,6 +16,17 @@ session = requests.Session()
 _SESS_ID: str | None = None
 _SESS_EXP: float = 0.0  # epoch seconds when our cached session should be considered stale
 
+def _rest_base() -> str:
+    """
+    Derive the REST base (…/WebUntis) from UNTIS_BASE which typically ends with jsonrpc.do.
+    """
+    if not BASE:
+        raise RuntimeError("UNTIS_BASE missing")
+    if "/WebUntis" in BASE:
+        return BASE.split("/WebUntis", 1)[0] + "/WebUntis"
+    if BASE.endswith("/jsonrpc.do"):
+        return BASE[:-len("/jsonrpc.do")]
+    return BASE.rstrip("/")
 
 # ---------------- core RPC ----------------
 def _rpc(method, params=None, cookies=None):
@@ -84,6 +95,57 @@ def _yyyymmdd(d: date) -> int:
 
 def _hm(n: int) -> str:
     return f"{n // 100:02d}:{n % 100:02d}"
+
+
+def _rest_exams(start_date: date, end_date: date, exam_type_id: int = 0):
+    """
+    Fetch exams via the new WebUntis REST endpoint (/api/exams).
+    Falls back to the caller if the endpoint is not reachable.
+    """
+    base = _rest_base()
+    url = base.rstrip("/") + "/api/exams"
+    params = {
+        "startDate": _yyyymmdd(start_date),
+        "endDate": _yyyymmdd(end_date),
+        "examTypeId": int(exam_type_id),
+        "withGrades": "true",
+    }
+    # Pass element information when available; class logins use klasseId, student logins studentId.
+    if ETYPE == 1:   # class
+        params["klasseId"] = EID
+        params["studentId"] = -1
+    elif ETYPE == 5:  # student
+        params["studentId"] = EID
+        params["klasseId"] = -1
+    else:
+        params["studentId"] = -1
+        params["klasseId"] = -1
+
+    headers = {
+        "User-Agent": "untis-pwa/1.0",
+        "Referer": base + "/",
+    }
+    resp = session.get(url, params=params, cookies=_login(), headers=headers, timeout=25)
+    resp.raise_for_status()
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"REST exams: invalid JSON ({exc})")
+
+    if isinstance(payload, dict):
+        if payload.get("errors"):
+            raise RuntimeError(f"REST exams error: {payload.get('errors')}")
+        data_section = payload.get("data") if isinstance(payload.get("data"), dict) else None
+        exams = None
+        if data_section and isinstance(data_section.get("exams"), list):
+            exams = data_section.get("exams")
+        elif isinstance(payload.get("exams"), list):
+            exams = payload.get("exams")
+        if exams is not None:
+            return exams
+        if payload.get("message"):
+            raise RuntimeError(f"REST exams error: {payload.get('message')}")
+    raise RuntimeError("REST exams: unexpected response")
 
 
 def _status_from_item(x, note: str) -> str:
@@ -207,12 +269,24 @@ def fetch_exams(start_date: date, end_date: date, exam_type_id: int = 0):
 
     WebUntis expects YYYYMMDD ints and an optional examTypeId (0 = all types).
     """
+    first_error: Exception | None = None
+    # Try the new REST endpoint first (post-update WebUntis). If it fails, fall back to JSON-RPC.
+    try:
+        return _rest_exams(start_date, end_date, exam_type_id)
+    except Exception as exc:  # keep the error in case RPC fails too
+        first_error = exc
+
     payload = {
         "startDate": _yyyymmdd(start_date),
         "endDate": _yyyymmdd(end_date),
         "examTypeId": int(exam_type_id),
     }
-    return _rpc_auth("getExams", payload)
+    try:
+        return _rpc_auth("getExams", payload)
+    except Exception:
+        if first_error:
+            raise first_error
+        raise
 
 
 def fetch_subject_map() -> dict[int, str]:

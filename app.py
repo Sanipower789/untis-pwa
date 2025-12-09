@@ -59,7 +59,12 @@ except Exception:
 app.permanent_session_lifetime = timedelta(days=SESSION_LIFETIME_DAYS)
 ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN")
 DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
-SETTINGS_DEFAULTS  = {"timeColumnWidth": "60"}
+SETTINGS_DEFAULTS  = {
+    "timeColumnWidth": "60",
+    "updateBannerText": "",
+    "updateBannerEnabled": "0",
+    "updateBannerUpdatedAt": "0",
+}
 BACKUP_VERSION     = 3
 
 if not ADMIN_TOKEN:
@@ -330,6 +335,25 @@ def _get_setting(key, default=None):
     return SETTINGS_DEFAULTS.get(key, default)
 
 
+def _setting_as_bool(value) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _update_banner_payload() -> dict | None:
+    """Return banner payload for clients or None if disabled/empty."""
+    message = str(_get_setting("updateBannerText", "") or "").strip()
+    enabled = _setting_as_bool(_get_setting("updateBannerEnabled", "0"))
+    updated_raw = _get_setting("updateBannerUpdatedAt", "0")
+    try:
+        updated_at = int(updated_raw)
+    except Exception:
+        updated_at = 0
+    if not message or not enabled:
+        return None
+    version = str(updated_at or "").strip() or message
+    return {"message": message, "enabled": True, "updatedAt": updated_at, "version": version}
+
+
 def _set_settings(values):
     if not values:
         return
@@ -344,6 +368,13 @@ def _set_settings(values):
                 numeric = int(SETTINGS_DEFAULTS["timeColumnWidth"])
             numeric = max(40, min(120, numeric))
             value = str(numeric)
+        if key == "updateBannerEnabled":
+            value = "1" if _setting_as_bool(value) else "0"
+        if key == "updateBannerUpdatedAt":
+            try:
+                value = str(int(value))
+            except Exception:
+                value = str(int(time.time()))
         db.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, str(value))
@@ -707,7 +738,11 @@ def api_timetable():
     except (TypeError, ValueError):
         width_value = int(SETTINGS_DEFAULTS["timeColumnWidth"])
     width_value = max(40, min(120, width_value))
-    settings_payload = {"timeColumnWidth": width_value}
+    banner_payload = _update_banner_payload()
+    settings_payload = {
+        "timeColumnWidth": width_value,
+        "updateBanner": banner_payload,
+    }
 
     try:
         lessons = fetch_week(ws)  # your Untis client returns raw lessons
@@ -735,7 +770,13 @@ def api_timetable():
                 "server_now": datetime.now(APP_TZ).isoformat(), "week_start": ws.isoformat()
             }
 
-    payload = {"ok": True, "weekStart": str(ws), "lessons": lessons, "settings": settings_payload}
+    payload = {
+        "ok": True,
+        "weekStart": str(ws),
+        "lessons": lessons,
+        "settings": settings_payload,
+        "updateBanner": banner_payload,
+    }
     _last_weekkey_payload[weekkey] = payload
     _last_weekkey_ts[weekkey] = time.time()
     return _no_store(jsonify(payload))
@@ -806,16 +847,41 @@ def api_exams():
     def _norm_exam(rec):
         if not isinstance(rec, dict):
             return None
-        eid = rec.get("id")
-        date_iso = _date_int_to_iso(rec.get("date"))
+        eid = rec.get("id") or rec.get("examId") or rec.get("exam_id")
+        date_val = rec.get("examDate") or rec.get("date")
+        date_iso = _date_int_to_iso(date_val)
         start_hm = rec.get("start") or rec.get("startTime")
         end_hm   = rec.get("end") or rec.get("endTime")
         start_hm = start_hm if isinstance(start_hm, str) and ":" in start_hm else _hm_from_int(start_hm)
         end_hm   = end_hm if isinstance(end_hm, str) and ":" in end_hm else _hm_from_int(end_hm)
-        subj_id = rec.get("subject")
-        subj_name = rec.get("subjectName") or subjects.get(subj_id, "")
-        class_ids = rec.get("classes") or []
-        teach_ids = rec.get("teachers") or []
+        subj_id = rec.get("subjectId") or rec.get("subject")
+        subj_name = rec.get("subjectName") or rec.get("subject") or subjects.get(subj_id, "")
+        name = rec.get("name") or rec.get("title") or subj_name
+
+        class_ids = rec.get("classes") or rec.get("classIds") or []
+        class_labels: list[str] = []
+        if isinstance(class_ids, list) and class_ids and all(isinstance(cid, int) for cid in class_ids):
+            class_labels = [classes.get(cid, "") for cid in class_ids if cid]
+        elif isinstance(rec.get("studentClass"), list):
+            class_labels = [str(c or "").strip() for c in rec.get("studentClass") if str(c or "").strip()]
+
+        teach_ids = rec.get("teacherIds") or rec.get("teachers") or []
+        teacher_labels: list[str] = []
+        if isinstance(teach_ids, list) and teach_ids and all(isinstance(tid, int) for tid in teach_ids):
+            teacher_labels = [teachers.get(tid, "") for tid in teach_ids if tid]
+        elif isinstance(rec.get("teachers"), list):
+            teacher_labels = [str(t or "").strip() for t in rec.get("teachers") if str(t or "").strip()]
+
+        rooms_list: list[str] = []
+        room_label = ""
+        if isinstance(rec.get("rooms"), list):
+            rooms_list = [str(r or "").strip() for r in rec.get("rooms") if str(r or "").strip()]
+            room_label = ", ".join(rooms_list)
+        if not room_label and rec.get("room"):
+            room_label = str(rec.get("room") or "").strip()
+
+        if not eid:
+            eid = f"rest-{date_iso}-{subj_name}-{start_hm}-{end_hm}"
         return {
             "id": eid,
             "date": date_iso,
@@ -823,10 +889,14 @@ def api_exams():
             "end": end_hm,
             "subject": subj_name,
             "subjectId": subj_id,
-            "classIds": class_ids,
-            "classes": [classes.get(cid, "") for cid in class_ids if cid],
+            "classIds": class_ids if isinstance(class_ids, list) else [],
+            "classes": class_labels,
             "teacherIds": teach_ids,
-            "teachers": [teachers.get(tid, "") for tid in teach_ids if tid],
+            "teachers": teacher_labels,
+            "name": name,
+            "rooms": rooms_list,
+            "room": room_label,
+            "note": rec.get("text") or rec.get("note") or "",
         }
 
     exams = [_norm_exam(rec) for rec in raw_exams]
@@ -1334,7 +1404,6 @@ def admin_save():
     new_courses: dict = payload.get("courses") or {}
     new_rooms: dict   = payload.get("rooms") or {}
     new_settings: dict = payload.get("settings") or {}
-    new_settings: dict = payload.get("settings") or {}
 
     # load current
     courses = _parse_mapping(COURSE_MAP_PATH)
@@ -1354,6 +1423,19 @@ def admin_save():
         for key, value in new_settings.items():
             if key in SETTINGS_DEFAULTS:
                 sanitized_settings[key] = str(value)
+        # handle update-banner timestamp bump when content/flag changes
+        if "updateBannerText" in new_settings or "updateBannerEnabled" in new_settings:
+            banner_text = (new_settings.get("updateBannerText") or "").strip()
+            banner_enabled = _setting_as_bool(new_settings.get("updateBannerEnabled"))
+            current_text = str(_get_setting("updateBannerText", "") or "").strip()
+            current_enabled = _setting_as_bool(_get_setting("updateBannerEnabled", "0"))
+
+            sanitized_settings["updateBannerText"] = banner_text
+            # Do not show an empty banner even if enabled is true.
+            sanitized_settings["updateBannerEnabled"] = "1" if banner_enabled and banner_text else "0"
+
+            if (banner_text != current_text) or (banner_enabled != current_enabled):
+                sanitized_settings["updateBannerUpdatedAt"] = str(int(time.time()))
     if sanitized_settings:
         _set_settings(sanitized_settings)
 
