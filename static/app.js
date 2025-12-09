@@ -821,6 +821,17 @@ function renderUpdateBanner(rawBanner){
   };
 }
 
+async function loadUpdateBannerPublic(){
+  try {
+    const res = await fetch("/api/update-banner", { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    renderUpdateBanner(data?.updateBanner);
+  } catch (err) {
+    console.warn("Update-banner fetch failed:", err);
+  }
+}
+
 /* ================== KLAUSUREN (Local) ================== */
 
 const LS_KLAUS = "klausuren_v1";
@@ -3553,6 +3564,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   (async () => {
+
+    // Show update banner even before login/session restore
+    loadUpdateBannerPublic();
 
     try {
 

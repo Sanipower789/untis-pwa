@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mein Stundenplan</title>
 
-  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=33">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=34">
   <meta name="theme-color" content="#6a1b9a" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=33">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=34">
 </head>
 <body>
 
@@ -210,10 +210,10 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='app.js') }}?v=33"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=34"></script>
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=33");
+      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=34");
     }
   </script>
 </body>

@@ -710,6 +710,11 @@ def api_courses():
 def api_health():
     return no_store(make_response(jsonify({"ok": True}), 200))
 
+@app.route("/api/update-banner")
+def api_update_banner():
+    payload = _update_banner_payload()
+    return _no_store(jsonify({"ok": True, "updateBanner": payload}))
+
 @app.route("/api/timetable")
 def api_timetable():
     # week selection
