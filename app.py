@@ -149,18 +149,6 @@ def init_db():
         count = cur.fetchone()[0]
         if count == 0:
             seed_exams = [
-                {"subject": "E5 G3", "name": "E5 G3", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["KEM"], "room": "A-K25, A-K25"},
-                {"subject": "E5 G2", "name": "E5 G2", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["KAS"], "room": "B-36, B-36"},
-                {"subject": "E5 G9", "name": "E5 G9", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["STZ"], "room": "D-11, D-11"},
-                {"subject": "E5 G1", "name": "E5 G1", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["NED"], "room": "B-31, B-31"},
-                {"subject": "E5 G4", "name": "E5 G4", "date": "2025-12-01", "start_time": "10:20", "end_time": "12:45", "classes": ["EF"], "teachers": ["ROM"], "room": "B-F2, B-F2"},
-                {"subject": "NSK EF", "name": "NSK EF", "date": "2025-12-03", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": [], "room": "B-F2, B-F2"},
-                {"subject": "D G3", "name": "D G3", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["HEM"], "room": "A-K05, A-K05"},
-                {"subject": "D G2", "name": "D G2", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["KAR"], "room": "C-11, C-11"},
-                {"subject": "D G1", "name": "D G1", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["SCL"], "room": "B-F1, B-F1"},
-                {"subject": "D G9", "name": "D G9", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["FIE"], "room": "B-F2, B-F2"},
-                {"subject": "D G8", "name": "D G8", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["NEU"], "room": "AULA, AULA"},
-                {"subject": "D G4", "name": "D G4", "date": "2025-12-05", "start_time": "09:10", "end_time": "11:20", "classes": ["EF"], "teachers": ["FLOE"], "room": "AULA, AULA"},
             ]
             for entry in seed_exams:
                 conn.execute(
