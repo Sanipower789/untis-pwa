@@ -1,6 +1,13 @@
 import os, json, time, re, sqlite3, shutil
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
+
+if load_dotenv:
+    load_dotenv(".env")
 from flask import (
     Flask, jsonify, make_response, render_template, request,
     redirect, url_for, session, g
@@ -46,7 +53,11 @@ from untis_client import (
     available_grades,
 )
 
-APP_TZ = ZoneInfo("Europe/Berlin")
+try:
+    APP_TZ = ZoneInfo("Europe/Berlin")
+except Exception:
+    from datetime import timezone
+    APP_TZ = timezone.utc
 ROOT   = os.path.dirname(os.path.abspath(__file__))
 DATA   = ROOT  # base directory for DB and legacy files
 DATA_DIR = os.path.join(ROOT, "data")  # organized data folder for mappings/seen
