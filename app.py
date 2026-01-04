@@ -1,4 +1,4 @@
-import os, json, time, re, sqlite3
+import os, json, time, re, sqlite3, shutil
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 from flask import (
@@ -46,7 +46,9 @@ from untis_client import (
 
 APP_TZ = ZoneInfo("Europe/Berlin")
 ROOT   = os.path.dirname(os.path.abspath(__file__))
-DATA   = ROOT  # keep mappings & seen files in project root
+DATA   = ROOT  # base directory for DB and legacy files
+DATA_DIR = os.path.join(ROOT, "data")  # organized data folder for mappings/seen
+os.makedirs(DATA_DIR, exist_ok=True)
 
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -445,8 +447,24 @@ def _no_store(resp):
     return resp
 
 # ---------- Mapping I/O ----------
-COURSE_MAP_PATH = os.path.join(DATA, "course_mapping.txt")
-ROOM_MAP_PATH   = os.path.join(DATA, "rooms_mapping.txt")
+COURSE_MAP_PATH = os.path.join(DATA_DIR, "course_mapping.txt")
+ROOM_MAP_PATH   = os.path.join(DATA_DIR, "rooms_mapping.txt")
+LEGACY_COURSE_MAP_PATH = os.path.join(DATA, "course_mapping.txt")
+LEGACY_ROOM_MAP_PATH   = os.path.join(DATA, "rooms_mapping.txt")
+
+def _bootstrap_data_file(preferred: str, legacy: str | None = None) -> None:
+    """Ensure preferred file exists by copying a legacy one if present."""
+    os.makedirs(os.path.dirname(preferred) or ".", exist_ok=True)
+    if os.path.exists(preferred):
+        return
+    if legacy and os.path.exists(legacy):
+        try:
+            shutil.copyfile(legacy, preferred)
+        except Exception:
+            pass
+
+_bootstrap_data_file(COURSE_MAP_PATH, LEGACY_COURSE_MAP_PATH)
+_bootstrap_data_file(ROOM_MAP_PATH, LEGACY_ROOM_MAP_PATH)
 
 def load_mapping_txt(path):
     """Return dict {lhs(normalized or raw key): rhs(display)} including empty rhs."""
@@ -490,8 +508,13 @@ def _write_mapping_txt(path: str, mapping: dict[str, str]) -> None:
         f.write("\n".join(lines) + ("\n" if lines else ""))
 
 # ---------- Seen keys (store raw & normalised) ----------
-SEEN_SUB_RAW_PATH = os.path.join(DATA, "seen_subjects_raw.json")
-SEEN_ROOM_RAW_PATH = os.path.join(DATA, "seen_rooms_raw.json")
+SEEN_SUB_RAW_PATH = os.path.join(DATA_DIR, "seen_subjects_raw.json")
+SEEN_ROOM_RAW_PATH = os.path.join(DATA_DIR, "seen_rooms_raw.json")
+LEGACY_SEEN_SUB = os.path.join(DATA, "seen_subjects_raw.json")
+LEGACY_SEEN_ROOM = os.path.join(DATA, "seen_rooms_raw.json")
+
+_bootstrap_data_file(SEEN_SUB_RAW_PATH, LEGACY_SEEN_SUB)
+_bootstrap_data_file(SEEN_ROOM_RAW_PATH, LEGACY_SEEN_ROOM)
 
 def _load_seen_raw(path: str) -> list[str]:
     if not os.path.exists(path): return []

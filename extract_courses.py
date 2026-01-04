@@ -1,7 +1,17 @@
 # extract_courses.py
-import json
-from untis_client import fetch_week  # deine Funktion zum Laden des Plans
 from datetime import date, timedelta
+from pathlib import Path
+from dotenv import load_dotenv
+from untis_client import fetch_week  # deine Funktion zum Laden des Plans
+
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
+COURSE_MAP_PATH = DATA_DIR / "course_mapping.txt"
+LEGACY_COURSE_MAP_PATH = BASE_DIR / "course_mapping.txt"
+
+load_dotenv(dotenv_path=BASE_DIR / ".env")
+
 
 def main():
     # Zeitraum -> eine Woche reicht, sonst kannst du erweitern
@@ -14,11 +24,20 @@ def main():
     courses = sorted(set(l["subject"] for l in lessons if l["subject"]))
 
     # Datei schreiben mit "Kursname = "
-    with open("course_mapping.txt", "w", encoding="utf-8") as f:
+    COURSE_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with COURSE_MAP_PATH.open("w", encoding="utf-8") as f:
         for c in courses:
             f.write(f"{c} = \n")
 
-    print("Alle Kurse in course_mapping.txt gespeichert!")
+    print(f"Alle Kurse in {COURSE_MAP_PATH} gespeichert!")
+
+    # optional: keep legacy copy if it existed before
+    if LEGACY_COURSE_MAP_PATH.exists():
+        try:
+            LEGACY_COURSE_MAP_PATH.write_text(COURSE_MAP_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+        except Exception:
+            pass
+
 
 if __name__ == "__main__":
     main()
