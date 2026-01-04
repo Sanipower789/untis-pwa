@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+ï»¿<!DOCTYPE html>
 <html lang="de">
 <head>
   <meta charset="utf-8" />
@@ -14,11 +14,11 @@
   <!-- Install-Overlay: blockt die App bis Install -->
   <div id="install-gate" class="gate">
     <div class="gate-card">
-      <h2>Zum Home-Bildschirm hinzufügen</h2>
+      <h2>Zum Home-Bildschirm hinzufÃ¼gen</h2>
       <p>Damit die App funktioniert, installiere sie bitte zuerst:</p>
       <ol>
-        <li><b>iPhone/iPad (Safari):</b> Teilen-Icon ▸ <b>Zum Home-Bildschirm</b>.</li>
-        <li><b>Android (Chrome):</b> Menü ⋮ ▸ <b>App installieren</b>.</li>
+        <li><b>iPhone/iPad (Safari):</b> Teilen-Icon â–¸ <b>Zum Home-Bildschirm</b>.</li>
+        <li><b>Android (Chrome):</b> MenÃ¼ â‹® â–¸ <b>App installieren</b>.</li>
       </ol>
       <button id="gate-continue" style="display:none;">Weiter</button>
     </div>
@@ -27,7 +27,7 @@
   <!-- Topbar -->
   <header>
     <div class="left">
-      <button id="btnSidebar" class="hamburger" aria-label="Menü" title="Menü">
+      <button id="btnSidebar" class="hamburger" aria-label="MenÃ¼" title="MenÃ¼">
         <span></span><span></span><span></span>
       </button>
       <h1>Mein Stundenplan</h1>
@@ -35,7 +35,7 @@
     <div class="header-actions">
       <button id="auth-button" class="plain">Anmelden</button>
       <button id="edit-courses">Kurse bearbeiten</button>
-      <button id="refresh-btn" title="Neu laden">🔄</button>
+      <button id="refresh-btn" title="Neu laden">ðŸ”„</button>
     </div>
   </header>
 
@@ -45,14 +45,14 @@
       <div class="update-banner__title">Neuigkeiten</div>
       <div id="update-banner-text" class="update-banner__text"></div>
     </div>
-    <button id="update-banner-close" class="plain update-banner__close" aria-label="Hinweis schließen">×</button>
+    <button id="update-banner-close" class="plain update-banner__close" aria-label="Hinweis schlieÃŸen">Ã—</button>
   </div>
 
   <!-- Slide-in Sidebar -->
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
-      <h2>Menü</h2>
-      <button id="sidebarClose" class="plain" aria-label="Schließen" title="Schließen">×</button>
+      <h2>MenÃ¼</h2>
+      <button id="sidebarClose" class="plain" aria-label="SchlieÃŸen" title="SchlieÃŸen">Ã—</button>
     </div>
     <nav class="sidebar-nav">
       <button type="button" id="navKlausuren" class="sidebar-link active">Klausuren</button>
@@ -116,7 +116,7 @@
             <div id="paletteSwatchesGlobal" class="palette-swatches"></div>
           </div>
           <div class="row">
-            <button type="button" id="colorReset" class="plain">Zurücksetzen</button>
+            <button type="button" id="colorReset" class="plain">ZurÃ¼cksetzen</button>
           </div>
         </div>
       </details>
@@ -142,9 +142,10 @@
   <main>
     <!-- Kurs-Auswahl -->
     <section id="course-selection" class="card" style="display:none;">
-      <h2>Kurse auswählen</h2>
-      <p class="muted">Wähle beliebig viele Kurse.</p>
-      <div id="courses" class="courses"></div>
+      <h2>Kurse ausw?hlen</h2>
+      <p class="muted">W?hle deine Kurse pro Stufe (EF / Q1).</p>
+      <div id="course-warning" class="alert" style="display:none;"></div>
+      <div id="courses" class="courses courses-split"></div>
       <div class="course-actions">
         <button id="save-courses">Speichern</button>
       </div>
@@ -155,14 +156,14 @@
     <div class="week-controls">
       <button type="button" id="week-prev">Vorherige Woche</button>
       <div id="week-range" class="week-range" aria-live="polite"></div>
-      <button type="button" id="week-next">Nächste Woche</button>
+      <button type="button" id="week-next">NÃ¤chste Woche</button>
     </div>
   </main>
 
   <div id="lesson-overlay" class="lesson-overlay" aria-hidden="true">
     <div class="lesson-overlay-backdrop"></div>
     <div class="lesson-overlay-card" role="dialog" aria-modal="true" aria-labelledby="lesson-overlay-title">
-      <button type="button" id="lesson-overlay-close" class="lesson-overlay-close" aria-label="Schließen">×</button>
+      <button type="button" id="lesson-overlay-close" class="lesson-overlay-close" aria-label="SchlieÃŸen">Ã—</button>
       <header>
         <h2 id="lesson-overlay-title"></h2>
         <p id="lesson-overlay-subtitle" class="muted"></p>
@@ -175,7 +176,7 @@
   <div id="auth-modal" class="auth-modal" aria-hidden="true">
     <div class="auth-backdrop"></div>
     <div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
-      <button type="button" id="auth-close" class="plain auth-close" aria-label="Schließen">x</button>
+      <button type="button" id="auth-close" class="plain auth-close" aria-label="SchlieÃŸen">x</button>
       <h2 id="auth-modal-title">Account</h2>
       <p id="auth-description" class="muted">Bitte melde dich an, um fortzufahren.</p>
       <div class="auth-choice">
@@ -189,7 +190,7 @@
         <label>Passwort
           <input type="password" name="password" autocomplete="new-password" required>
         </label>
-        <p class="muted small">Nur du kennst dein Passwort – merke es dir gut.</p>
+        <p class="muted small">Nur du kennst dein Passwort â€“ merke es dir gut.</p>
         <button type="submit" class="primary">Registrieren</button>
         <p class="auth-error muted" role="alert"></p>
       </form>

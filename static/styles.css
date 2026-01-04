@@ -75,6 +75,10 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 .courses{columns:2;column-gap:18px}
 .course-actions{display:flex;justify-content:flex-end;margin:12px 0 0;}
 .course-actions button{padding:8px 12px;font-weight:700;}
+.courses-split{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;columns:auto}
+.course-group-title{font-weight:600;margin-bottom:6px}
+.course-select{width:100%;min-height:160px}
+.alert{background:#fff3cd;color:#8a6d3b;border:1px solid #f0d58c;border-radius:8px;padding:10px;margin-bottom:10px}
 @media(min-width:640px){.courses{columns:3}}
 .chk{break-inside:avoid;display:block;margin:6px 0}
 

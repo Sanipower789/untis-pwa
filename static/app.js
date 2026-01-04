@@ -729,11 +729,12 @@ function lessonMatchesSelection(lesson, selectedSet) {
   ];
   resolved.forEach(k => { if (k) candidates.push(k); });
   const selectedBase = new Set(Array.from(selectedSet).map(stripGradePrefix));
+  const hasGradeSelection = Array.from(selectedSet).some(k => typeof k === "string" && k.includes(":"));
   for (const key of candidates) {
     if (!key) continue;
-    if (selectedSet.has(key)) return true;
-    if (selectedBase.has(key)) return true;
     if (grade && selectedSet.has(`${grade}:${key}`)) return true;
+    if (selectedSet.has(key)) return true; // legacy unprefixed stored value
+    if (!hasGradeSelection && selectedBase.has(key)) return true; // only allow cross-grade matching when no grade-specific selection exists
   }
   return false;
 }
@@ -1016,6 +1017,75 @@ function registerCourseOptions(list) {
 }
 
 
+
+async function loadCourseOptionsFromTxt() {
+
+  const tryUrls = ["/static/course_mapping.txt", "/course_mapping.txt"];
+
+  const byKey = new Map();
+
+  for (const url of tryUrls) {
+
+    try {
+
+      const res = await fetch(${url}?v=, { cache: "no-store" });
+
+      if (!res.ok) continue;
+
+      const txt = await res.text();
+
+      txt.split(/?
+/).forEach(line => {
+
+        const s = line.trim();
+
+        if (!s || s.startsWith("#")) return;
+
+        const i = s.indexOf("=");
+
+        if (i === -1) return;
+
+        const lhs = s.slice(0, i).trim();
+
+        const rhs = s.slice(i + 1).trim();
+
+        if (!lhs) return;
+
+        const gradeLabel = "EF";
+
+        const keyBase = normKey(lhs);
+
+        if (!keyBase) return;
+
+        const key = ${gradeLabel}:;
+
+        const label = rhs || lhs;
+
+        byKey.set(key, label);
+
+      });
+
+      break;
+
+    } catch (_) { /* try next */ }
+
+  }
+
+  return Array.from(byKey.entries())
+
+    .map(([key, label]) => {
+
+      const idx = key.indexOf(":");
+
+      const grade = idx !== -1 ? key.slice(0, idx) : "EF";
+
+      return { key, label, grade };
+
+    })
+
+    .sort((a, b) => a.label.localeCompare(b.label, 'de'));
+
+}
 
 async function loadCourseOptionsFromTxt() {
 
@@ -2609,6 +2679,8 @@ async function buildCourseSelection(allLessons) {
 
   const saveBtn  = document.getElementById("save-courses");
 
+  const warnEl   = document.getElementById("course-warning");
+
   const nameInput= document.getElementById("profile-name");
 
   if (!cs || !box || !saveBtn || !editBtn) return;
@@ -2637,41 +2709,73 @@ async function buildCourseSelection(allLessons) {
 
   const grouped = new Map();
   options.forEach(opt => {
-    const grade = (opt.grade || "All").toString();
+    const grade = (opt.grade || "Andere").toString();
     if (!grouped.has(grade)) grouped.set(grade, []);
     grouped.get(grade).push(opt);
   });
+  const orderedGrades = Array.from(grouped.keys()).sort((a,b)=>a.localeCompare(b,"de"));
+  const selects = [];
 
-  grouped.forEach((list, grade) => {
+  const updateWarning = () => {
+    if (!warnEl) return;
+    const pickedGrades = selects
+      .map(sel => ({ grade: sel.dataset.grade || "", count: Array.from(sel.selectedOptions || []).length }))
+      .filter(entry => entry.count > 0)
+      .map(entry => entry.grade || "Unbekannt");
+    const unique = new Set(pickedGrades);
+    if (unique.size > 1) {
+      warnEl.textContent = "Achtung: EF und Q1 gleichzeitig gewaehlt. Bitte nur eine Stufe waehlen, sonst doppelte Eintraege.";
+      warnEl.style.display = "block";
+    } else {
+      warnEl.style.display = "none";
+    }
+  };
+
+  orderedGrades.forEach((grade) => {
+    const list = grouped.get(grade) || [];
     const section = document.createElement("div");
     section.className = "course-group";
+
     const title = document.createElement("div");
     title.className = "course-group-title";
     title.textContent = grade;
     section.appendChild(title);
+
+    const select = document.createElement("select");
+    select.multiple = true;
+    select.dataset.grade = grade;
+    select.size = Math.min(10, Math.max(5, list.length || 5));
+    select.className = "course-select";
+
     list.sort((a,b)=> (a.label||"").localeCompare(b.label||"", "de"));
     list.forEach(opt => {
-      const key = opt.key;
-      const labelText = opt.label || opt.key;
-      const id = "sub_" + key.replace(/[^a-z0-9]+/gi, "_");
-      const label = document.createElement("label");
-      label.className = "chk";
-      label.innerHTML =
-        `<input type="checkbox" id="${id}" value="${escapeHtml(key)}" ${saved.has(key)?"checked":""}> <span>${escapeHtml(labelText)}</span>`;
-      section.appendChild(label);
+      const option = document.createElement("option");
+      option.value = opt.key;
+      option.textContent = opt.label || opt.key;
+      if (saved.has(opt.key)) option.selected = true;
+      select.appendChild(option);
     });
+
+    select.addEventListener("change", updateWarning);
+
+    section.appendChild(select);
     box.appendChild(section);
+    selects.push(select);
   });
+
+  updateWarning();
 
 
 
   saveBtn.onclick = () => {
 
-    const selected = [...box.querySelectorAll("input:checked")]
+    const selected = [];
 
-      .map(i => i.value)
-
-      .filter(Boolean);
+    selects.forEach(sel => {
+      Array.from(sel.selectedOptions || []).forEach(opt => {
+        if (opt.value) selected.push(opt.value);
+      });
+    });
 
     setCourses(selected);
 
@@ -2717,6 +2821,7 @@ async function buildCourseSelection(allLessons) {
 
 
 
+function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWidth = null) {
 function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWidth = null) {
 
   hideLessonOverlay();

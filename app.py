@@ -468,6 +468,19 @@ def _bootstrap_data_file(preferred: str, legacy: str | None = None) -> None:
 _bootstrap_data_file(COURSE_MAP_PATH, LEGACY_COURSE_MAP_PATH)
 _bootstrap_data_file(ROOM_MAP_PATH, LEGACY_ROOM_MAP_PATH)
 
+def _mirror_to_legacy(source: str, legacy: str | None = None) -> None:
+    """Best-effort copy back to legacy path for fallbacks (txt fallback in frontend)."""
+    if not legacy:
+        return
+    try:
+        if os.path.exists(source):
+            shutil.copyfile(source, legacy)
+    except Exception:
+        pass
+
+_mirror_to_legacy(COURSE_MAP_PATH, LEGACY_COURSE_MAP_PATH)
+_mirror_to_legacy(ROOM_MAP_PATH, LEGACY_ROOM_MAP_PATH)
+
 def load_mapping_txt(path):
     """Return dict {lhs(normalized or raw key): rhs(display)} including empty rhs."""
     data = {}
