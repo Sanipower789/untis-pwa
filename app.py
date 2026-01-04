@@ -38,10 +38,12 @@ load_last_good()
 # ---- Untis client (your existing implementation) ----
 from untis_client import (
     fetch_week,
+    fetch_week_all,
     fetch_exams,
     fetch_subject_map,
     fetch_class_map,
     fetch_teacher_map,
+    available_grades,
 )
 
 APP_TZ = ZoneInfo("Europe/Berlin")
@@ -697,7 +699,7 @@ def api_mappings():
 def api_courses():
     """Return course options (key + display label) from course_mapping.txt.
 
-    Key: normalised LHS via norm_key. Label: RHS if present, else original LHS.
+    Key: grade-prefixed normalised LHS (GRADE:norm_key). Label: RHS if present, else original LHS.
     """
     raw_map = load_mapping_txt(COURSE_MAP_PATH)  # { raw_left: rhs }
     options: dict[str, str] = {}
@@ -711,10 +713,11 @@ def api_courses():
             continue
         options[nk] = label
 
-    items = [
-        {"key": key, "label": options[key]}
-        for key in sorted(options.keys(), key=lambda k: (options[k].lower(), options[k]))
-    ]
+    grades = available_grades() or ["EF"]
+    items: list[dict] = []
+    for grade in grades:
+        for key in sorted(options.keys(), key=lambda k: (options[k].lower(), options[k])):
+            items.append({"key": f"{grade}:{key}", "label": options[key], "grade": grade})
     return _no_store(jsonify({"ok": True, "courses": items}))
 
 @app.route("/api/health")
@@ -760,11 +763,31 @@ def api_timetable():
         "updateBanner": banner_payload,
     }
 
-    try:
-        lessons = fetch_week(ws)  # your Untis client returns raw lessons
-    except Exception as e:
-        app.logger.exception("fetch_week failed")
-        payload = {"ok": False, "weekStart": str(ws), "lessons": [], "error": str(e), "settings": settings_payload}
+    lessons: list[dict] = []
+    errors: list[str] = []
+    grades = available_grades()
+    if not grades:
+        grades = ["EF"]
+    for grade in grades:
+        try:
+            grade_lessons = fetch_week(ws, grade)
+            for L in grade_lessons:
+                L["grade"] = grade
+            lessons.extend(grade_lessons)
+        except Exception as e:
+            msg = f"{grade}: {e}"
+            errors.append(msg)
+            app.logger.warning("fetch_week failed for %s: %s", grade, e)
+
+    if errors and not lessons:
+        payload = {
+            "ok": False,
+            "weekStart": str(ws),
+            "lessons": [],
+            "error": "; ".join(errors),
+            "settings": settings_payload,
+            "grades": grades,
+        }
         _last_weekkey_payload[weekkey] = payload
         _last_weekkey_ts[weekkey] = time.time()
         return _no_store(jsonify(payload))
@@ -792,6 +815,8 @@ def api_timetable():
         "lessons": lessons,
         "settings": settings_payload,
         "updateBanner": banner_payload,
+        "grades": grades,
+        "errors": errors if errors else [],
     }
     _last_weekkey_payload[weekkey] = payload
     _last_weekkey_ts[weekkey] = time.time()

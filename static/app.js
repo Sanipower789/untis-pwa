@@ -717,6 +717,7 @@ function mapSubject(lesson) {
 function lessonMatchesSelection(lesson, selectedSet) {
   if (!(selectedSet instanceof Set) || selectedSet.size === 0) return true;
   const candidates = [];
+  const grade = (lesson?.grade || "").trim();
   const subjOrig = lesson.subject_original ?? "";
   const subjLive = lesson.subject ?? "";
   candidates.push(normKey(subjOrig));
@@ -727,8 +728,12 @@ function lessonMatchesSelection(lesson, selectedSet) {
     resolveCourseKey(mapSubject(lesson))
   ];
   resolved.forEach(k => { if (k) candidates.push(k); });
+  const selectedBase = new Set(Array.from(selectedSet).map(stripGradePrefix));
   for (const key of candidates) {
-    if (key && selectedSet.has(key)) return true;
+    if (!key) continue;
+    if (selectedSet.has(key)) return true;
+    if (selectedBase.has(key)) return true;
+    if (grade && selectedSet.has(`${grade}:${key}`)) return true;
   }
   return false;
 }
@@ -761,8 +766,10 @@ function examMatchesSelection(exam, selectedSet){
   if (!(selectedSet instanceof Set) || selectedSet.size === 0) return true;
   const keys = examCourseKeys(exam);
   if (!keys.size) return false;
+  const selectedBase = new Set(Array.from(selectedSet).map(stripGradePrefix));
   for (const key of keys) {
     if (selectedSet.has(key)) return true;
+    if (selectedBase.has(key)) return true;
   }
   return false;
 }
@@ -972,7 +979,13 @@ let COURSE_OPTIONS = [];
 
 let COURSE_LABEL_BY_KEY = new Map();
 
-let COURSE_KEY_BY_LABEL = new Map(); // keyed by _norm(label)
+let COURSE_GRADE_BY_KEY = new Map();
+
+const stripGradePrefix = (key) => {
+  if (typeof key !== "string") return "";
+  const idx = key.indexOf(":");
+  return idx === -1 ? key.trim() : key.slice(idx + 1).trim();
+};
 
 
 
@@ -982,7 +995,7 @@ function registerCourseOptions(list) {
 
   COURSE_LABEL_BY_KEY = new Map();
 
-  COURSE_KEY_BY_LABEL = new Map();
+  COURSE_GRADE_BY_KEY = new Map();
 
   COURSE_OPTIONS.forEach(opt => {
 
@@ -990,17 +1003,13 @@ function registerCourseOptions(list) {
 
     const label = (opt?.label ?? "").trim() || key;
 
+    const grade = (opt?.grade ?? "").trim();
+
     if (!key) return;
 
     COURSE_LABEL_BY_KEY.set(key, label);
 
-    const normLabel = _norm(label);
-
-    if (normLabel && !COURSE_KEY_BY_LABEL.has(normLabel)) {
-
-      COURSE_KEY_BY_LABEL.set(normLabel, key);
-
-    }
+    COURSE_GRADE_BY_KEY.set(key, grade);
 
   });
 
@@ -1058,7 +1067,7 @@ async function loadCourseOptionsFromTxt() {
 
   return Array.from(byKey.entries())
 
-    .map(([key, label]) => ({ key, label }))
+    .map(([key, label]) => ({ key, label, grade: "EF" }))
 
     .sort((a, b) => a.label.localeCompare(b.label, 'de'));
 
@@ -1082,7 +1091,11 @@ async function loadCourseOptions() {
 
         const opts = j.courses
 
-          .map(c => ({ key: String(c.key || "").trim(), label: String(c.label || "").trim() || String(c.key || "") }))
+          .map(c => ({
+            key: String(c.key || "").trim(),
+            label: String(c.label || "").trim() || String(c.key || ""),
+            grade: String(c.grade || "").trim()
+          }))
 
           .filter(opt => opt.key);
 
@@ -1123,14 +1136,6 @@ function resolveCourseKey(value) {
   if (!trimmed) return null;
 
   if (COURSE_LABEL_BY_KEY.has(trimmed)) return trimmed;
-
-  const normLabel = _norm(trimmed);
-
-  if (normLabel && COURSE_KEY_BY_LABEL.has(normLabel)) return COURSE_KEY_BY_LABEL.get(normLabel);
-
-  const nk = normKey(trimmed);
-
-  if (nk && COURSE_LABEL_BY_KEY.has(nk)) return nk;
 
   return null;
 
@@ -2630,24 +2635,32 @@ async function buildCourseSelection(allLessons) {
 
   box.innerHTML = "";
 
+  const grouped = new Map();
   options.forEach(opt => {
+    const grade = (opt.grade || "All").toString();
+    if (!grouped.has(grade)) grouped.set(grade, []);
+    grouped.get(grade).push(opt);
+  });
 
-    const key = opt.key;
-
-    const labelText = opt.label || opt.key;
-
-    const id = "sub_" + key.replace(/[^a-z0-9]+/gi, "_");
-
-    const label = document.createElement("label");
-
-    label.className = "chk";
-
-    label.innerHTML =
-
-      `<input type="checkbox" id="${id}" value="${escapeHtml(key)}" ${saved.has(key)?"checked":""}> <span>${escapeHtml(labelText)}</span>`;
-
-    box.appendChild(label);
-
+  grouped.forEach((list, grade) => {
+    const section = document.createElement("div");
+    section.className = "course-group";
+    const title = document.createElement("div");
+    title.className = "course-group-title";
+    title.textContent = grade;
+    section.appendChild(title);
+    list.sort((a,b)=> (a.label||"").localeCompare(b.label||"", "de"));
+    list.forEach(opt => {
+      const key = opt.key;
+      const labelText = opt.label || opt.key;
+      const id = "sub_" + key.replace(/[^a-z0-9]+/gi, "_");
+      const label = document.createElement("label");
+      label.className = "chk";
+      label.innerHTML =
+        `<input type="checkbox" id="${id}" value="${escapeHtml(key)}" ${saved.has(key)?"checked":""}> <span>${escapeHtml(labelText)}</span>`;
+      section.appendChild(label);
+    });
+    box.appendChild(section);
   });
 
 
