@@ -1028,14 +1028,13 @@ async function loadCourseOptionsFromTxt() {
 
     try {
 
-      const res = await fetch(${url}?v=, { cache: "no-store" });
+      const res = await fetch(`${url}?v=${Date.now()}`, { cache: "no-store" });
 
       if (!res.ok) continue;
 
       const txt = await res.text();
 
-      txt.split(/?
-/).forEach(line => {
+      txt.split(/\r?\n/).forEach(line => {
 
         const s = line.trim();
 
@@ -1057,7 +1056,7 @@ async function loadCourseOptionsFromTxt() {
 
         if (!keyBase) return;
 
-        const key = ${gradeLabel}:;
+        const key = `${gradeLabel}:${keyBase}`;
 
         const label = rhs || lhs;
 
@@ -1082,62 +1081,6 @@ async function loadCourseOptionsFromTxt() {
       return { key, label, grade };
 
     })
-
-    .sort((a, b) => a.label.localeCompare(b.label, 'de'));
-
-}
-
-async function loadCourseOptionsFromTxt() {
-
-  const tryUrls = ["/static/course_mapping.txt", "/course_mapping.txt"];
-
-  const byKey = new Map();
-
-  for (const url of tryUrls) {
-
-    try {
-
-      const res = await fetch(`${url}?v=${Date.now()}`, { cache: "no-store" });
-
-      if (!res.ok) continue;
-
-      const txt = await res.text();
-
-      txt.split(/\r?\n/).forEach(line => {
-
-        const s = line.trim();
-
-        if (!s || s.startsWith("#")) return;
-
-        const i = s.indexOf("=");
-
-        if (i === -1) return;
-
-        const lhs = s.slice(0, i).trim();
-
-        const rhs = s.slice(i + 1).trim();
-
-        if (!lhs) return;
-
-        const key = normKey(lhs);
-
-        if (!key) return;
-
-        const label = rhs || lhs;
-
-        byKey.set(key, label);
-
-      });
-
-      break;
-
-    } catch (_) { /* try next */ }
-
-  }
-
-  return Array.from(byKey.entries())
-
-    .map(([key, label]) => ({ key, label, grade: "EF" }))
 
     .sort((a, b) => a.label.localeCompare(b.label, 'de'));
 
