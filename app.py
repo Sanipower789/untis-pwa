@@ -492,6 +492,36 @@ def _mirror_to_legacy(source: str, legacy: str | None = None) -> None:
 _mirror_to_legacy(COURSE_MAP_PATH, LEGACY_COURSE_MAP_PATH)
 _mirror_to_legacy(ROOM_MAP_PATH, LEGACY_ROOM_MAP_PATH)
 
+def _load_raw_subjects_for_grade(grade: str) -> list[str]:
+    fname = os.path.join(DATA_DIR, f"subjects_raw_{grade.lower()}.txt")
+    out: list[str] = []
+    try:
+        with open(fname, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if s and not s.startswith("#"):
+                    out.append(s)
+    except FileNotFoundError:
+        pass
+    return out
+
+def _load_cached_lessons_for_grade(grade: str) -> list[dict]:
+    fname = os.path.join(DATA_DIR, "exports", f"lessons_mapped_{grade.lower()}.json")
+    try:
+        with open(fname, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                lessons = []
+                for L in data:
+                    if isinstance(L, dict):
+                        L = dict(L)
+                        L.setdefault("grade", grade)
+                        lessons.append(L)
+                return lessons
+    except Exception:
+        pass
+    return []
+
 def load_mapping_txt(path):
     """Return dict {lhs(normalized or raw key): rhs(display)} including empty rhs."""
     data = {}
@@ -726,22 +756,34 @@ def api_courses():
     Key: grade-prefixed normalised LHS (GRADE:norm_key). Label: RHS if present, else original LHS.
     """
     raw_map = load_mapping_txt(COURSE_MAP_PATH)  # { raw_left: rhs }
-    options: dict[str, str] = {}
-    for left, right in raw_map.items():
-        left = (left or "").strip()
-        label = (right or "").strip() or left
-        if not left or not label:
-            continue
+
+    def _label_for(raw_left: str) -> tuple[str, str] | None:
+        left = (raw_left or "").strip()
+        label = (raw_map.get(raw_left, "") or "").strip() or left
         nk = norm_key(left)
         if not nk:
-            continue
-        options[nk] = label
+            return None
+        return nk, label
+
+    base_options: dict[str, str] = {}
+    for left in raw_map.keys():
+        pair = _label_for(left)
+        if pair:
+            nk, label = pair
+            base_options[nk] = label
 
     grades = available_grades() or ["EF"]
     items: list[dict] = []
     for grade in grades:
-        for key in sorted(options.keys(), key=lambda k: (options[k].lower(), options[k])):
-            items.append({"key": f"{grade}:{key}", "label": options[key], "grade": grade})
+        # augment with raw subjects per grade if mapping is empty
+        raw_subjects = _load_raw_subjects_for_grade(grade)
+        for raw_subj in raw_subjects:
+            pair = _label_for(raw_subj)
+            if pair:
+                nk, label = pair
+                base_options.setdefault(nk, label)
+        for key in sorted(base_options.keys(), key=lambda k: (base_options[k].lower(), base_options[k])):
+            items.append({"key": f"{grade}:{key}", "label": base_options[key], "grade": grade})
     return _no_store(jsonify({"ok": True, "courses": items}))
 
 @app.route("/api/health")
@@ -802,6 +844,10 @@ def api_timetable():
             msg = f"{grade}: {e}"
             errors.append(msg)
             app.logger.warning("fetch_week failed for %s: %s", grade, e)
+            cached = _load_cached_lessons_for_grade(grade)
+            if cached:
+                lessons.extend(cached)
+                errors[-1] = msg + " (served cached lessons)"
 
     if errors and not lessons:
         payload = {
