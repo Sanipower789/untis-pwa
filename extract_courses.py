@@ -1,42 +1,53 @@
 # extract_courses.py
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from dotenv import load_dotenv
-from untis_client import fetch_week  # deine Funktion zum Laden des Plans
+from untis_client import fetch_week, available_grades
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
-COURSE_MAP_PATH = DATA_DIR / "course_mapping.txt"
-LEGACY_COURSE_MAP_PATH = BASE_DIR / "course_mapping.txt"
+
+SUBJECTS_ALL_PATH = DATA_DIR / "subjects_raw_all.txt"
+SUBJECTS_GRADE_PATH = {
+    "EF": DATA_DIR / "subjects_raw_ef.txt",
+    "Q1": DATA_DIR / "subjects_raw_q1.txt",
+}
 
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 
 def main():
-    # Zeitraum -> eine Woche reicht, sonst kannst du erweitern
     start = date.today()
-    end = start + timedelta(days=14)
+    grades = available_grades() or ["EF"]
 
-    lessons = fetch_week(start)
+    all_subjects = set()
+    per_grade_subjects: dict[str, set[str]] = {g: set() for g in grades}
 
-    # Alle einzigartigen Kursnamen sammeln
-    courses = sorted(set(l["subject"] for l in lessons if l["subject"]))
+    for grade in grades:
+        lessons = fetch_week(start, grade)
+        subs = per_grade_subjects.setdefault(grade, set())
+        for l in lessons:
+            subj = (l.get("subject_original") or l.get("subject") or "").strip()
+            if not subj:
+                continue
+            subs.add(subj)
+            all_subjects.add(subj)
 
-    # Datei schreiben mit "Kursname = "
-    COURSE_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with COURSE_MAP_PATH.open("w", encoding="utf-8") as f:
-        for c in courses:
-            f.write(f"{c} = \n")
+    # write per-grade subject lists
+    for grade, subs in per_grade_subjects.items():
+        path = SUBJECTS_GRADE_PATH.get(grade) or DATA_DIR / f"subjects_raw_{grade.lower()}.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            for s in sorted(subs, key=lambda x: x.lower()):
+                f.write(s + "\n")
+        print(f"Wrote {path} ({len(subs)} subjects)")
 
-    print(f"Alle Kurse in {COURSE_MAP_PATH} gespeichert!")
-
-    # optional: keep legacy copy if it existed before
-    if LEGACY_COURSE_MAP_PATH.exists():
-        try:
-            LEGACY_COURSE_MAP_PATH.write_text(COURSE_MAP_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-        except Exception:
-            pass
+    # combined list
+    with SUBJECTS_ALL_PATH.open("w", encoding="utf-8") as f:
+        for s in sorted(all_subjects, key=lambda x: x.lower()):
+            f.write(s + "\n")
+    print(f"Wrote {SUBJECTS_ALL_PATH} ({len(all_subjects)} subjects)")
 
 
 if __name__ == "__main__":

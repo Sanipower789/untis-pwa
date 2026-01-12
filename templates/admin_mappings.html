@@ -56,18 +56,32 @@
 
 <div class="wrap">
   <div class="row">
-    <div class="card" id="subjects">
-      <h2>Fächer</h2>
+    <div class="card" id="subjects-ef">
+      <h2>Fächer EF</h2>
       <div class="bar">
-        <span class="pill" id="sub-count"></span>
-        <span class="pill" id="sub-unmapped"></span>
-        <label class="pill"><input type="checkbox" id="only-unmapped-sub" checked> nur offene</label>
+        <span class="pill" id="sub-count-ef"></span>
+        <span class="pill" id="sub-unmapped-ef"></span>
+        <label class="pill"><input type="checkbox" id="only-unmapped-sub-ef" checked> nur offene</label>
       </div>
-      <table id="sub-table">
+      <table id="sub-table-ef">
         <thead><tr><th style="width:45%">Normalisierter Schlüssel</th><th>Anzeige-Name</th></tr></thead>
         <tbody></tbody>
       </table>
-      <div class="foot"><button id="save-sub">Speichern</button></div>
+      <div class="foot"><button id="save-sub-ef">Speichern</button></div>
+    </div>
+
+    <div class="card" id="subjects-q1">
+      <h2>Fächer Q1</h2>
+      <div class="bar">
+        <span class="pill" id="sub-count-q1"></span>
+        <span class="pill" id="sub-unmapped-q1"></span>
+        <label class="pill"><input type="checkbox" id="only-unmapped-sub-q1" checked> nur offene</label>
+      </div>
+      <table id="sub-table-q1">
+        <thead><tr><th style="width:45%">Normalisierter Schlüssel</th><th>Anzeige-Name</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="foot"><button id="save-sub-q1">Speichern</button></div>
     </div>
 
     <div class="card" id="rooms">
@@ -95,7 +109,6 @@
         <thead>
           <tr>
             <th>Benutzername</th>
-            <th>Passwort</th>
             <th style="text-align:right;">Aktion</th>
           </tr>
         </thead>
@@ -199,9 +212,9 @@
     <div class="card" id="backup">
       <h2>Backup</h2>
       <div class="bar">
-        <button id="backup-download">Backup herunterladen</button>
+        <button id="backup-download" type="button">Backup herunterladen</button>
         <input type="file" id="backup-file" accept="application/json">
-        <button id="backup-upload">Backup einspielen</button>
+        <button id="backup-upload" type="button">Backup einspielen</button>
       </div>
       <div id="backup-status" class="muted"></div>
     </div>
@@ -215,8 +228,9 @@ const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 
 const state = {
   courses: {}, rooms: {},
-  subjects_grouped: {}, rooms_grouped: {},
-  unmapped_subjects: [], unmapped_rooms: [],
+  courses_ef: {}, courses_q1: {},
+  subjects_grouped_ef: {}, subjects_grouped_q1: {}, rooms_grouped: {},
+  unmapped_subjects_ef: [], unmapped_subjects_q1: [], unmapped_rooms: [],
   users: [], vacations: [], exams: [],
   settings: { timeColumnWidth: "60" }
 };
@@ -227,7 +241,7 @@ const fmtDate = (iso) => {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("de-DE");
 };
 
-const escapeHtml = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({
+const escapeHtml = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 }[c] || c));
 
@@ -248,28 +262,44 @@ function rowHTML(nk, variants, currentValue, isMapped){
 }
 
 async function loadState(){
-  const r = await fetch("/api/admin/state", {cache:"no-store"});
-  if (!r.ok){ alert("Nicht autorisiert."); location.href="/admin/login"; return; }
-  const j = await r.json();
-  if (!j.ok){ alert(j.error||"Fehler"); return; }
+  let j;
+  try {
+    const r = await fetch("/api/admin/state", {cache:"no-store"});
+    if (!r.ok){ alert("Nicht autorisiert."); location.href="/admin/login"; return; }
+    j = await r.json();
+  } catch (err){
+    alert("Laden fehlgeschlagen. Bitte neu laden.");
+    return;
+  }
+  if (!j || !j.ok){ alert((j && j.error) || "Fehler"); return; }
 
   state.courses = j.courses || {};
+  state.courses_ef = j.courses_ef || {};
+  state.courses_q1 = j.courses_q1 || {};
   state.rooms = j.rooms || {};
-  state.subjects_grouped = j.subjects_grouped || {};
+  state.subjects_grouped_ef = j.subjects_grouped_ef || {};
+  state.subjects_grouped_q1 = j.subjects_grouped_q1 || {};
   state.rooms_grouped = j.rooms_grouped || {};
-  state.unmapped_subjects = j.unmapped_subjects || [];
+  state.unmapped_subjects_ef = j.unmapped_subjects_ef || [];
+  state.unmapped_subjects_q1 = j.unmapped_subjects_q1 || [];
   state.unmapped_rooms = j.unmapped_rooms || [];
   state.users = Array.isArray(j.users) ? j.users : [];
   state.vacations = Array.isArray(j.vacations) ? j.vacations : [];
   state.exams = Array.isArray(j.exams_manual) ? j.exams_manual : [];
   state.settings = j.settings || state.settings || { timeColumnWidth: "60" };
 
-  $("#sub-count").textContent  = `${Object.keys(state.subjects_grouped).length} Schlüssel`;
-  $("#room-count").textContent = `${Object.keys(state.rooms_grouped).length} Schlüssel`;
-  $("#sub-unmapped").textContent  = `${state.unmapped_subjects.length} offen`;
-  $("#room-unmapped").textContent = `${state.unmapped_rooms.length} offen`;
-  $("#user-count").textContent = `${state.users.length} Konten`;
-
+  const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  setText("sub-count-ef", `${Object.keys(state.subjects_grouped_ef).length} Schlüssel`);
+  setText("sub-count-q1", `${Object.keys(state.subjects_grouped_q1).length} Schlüssel`);
+  setText("room-count", `${Object.keys(state.rooms_grouped).length} Schlüssel`);
+  setText("sub-unmapped-ef", `${state.unmapped_subjects_ef.length} offen`);
+  setText("sub-unmapped-q1", `${state.unmapped_subjects_q1.length} offen`);
+  setText("room-unmapped", `${state.unmapped_rooms.length} offen`);
+  setText("user-count", `${state.users.length} Konten`);
+  const backupInfo = document.getElementById("backup-status");
+  if (backupInfo){
+    backupInfo.textContent = `Aktuelle Mappings: EF ${Object.keys(state.courses_ef).length}, Q1 ${Object.keys(state.courses_q1).length}`;
+  }
   renderTables();
   renderUsers();
   renderVacations();
@@ -278,45 +308,51 @@ async function loadState(){
 }
 
 function renderTables(){
-  const onlyOpenSub = $("#only-unmapped-sub").checked;
-  const subTB = $("#sub-table tbody");
-  subTB.innerHTML = "";
-  Object.keys(state.subjects_grouped).sort().forEach(nk=>{
-    const isMapped = Object.prototype.hasOwnProperty.call(state.courses, nk);
-    if (onlyOpenSub && isMapped) return;
-    subTB.insertAdjacentHTML(
-      "beforeend",
-      rowHTML(nk, state.subjects_grouped[nk], state.courses[nk] || "", isMapped)
-    );
-  });
-  if (!subTB.children.length) subTB.innerHTML = `<tr class="empty-row"><td colspan="2">Alles erledigt 🎉</td></tr>`;
-
-  const onlyOpenRm = $("#only-unmapped-room").checked;
+  const renderGrade = (grade) => {
+    const subTB = document.querySelector(`#sub-table-${grade} tbody`);
+    if (!subTB) return;
+    const onlyOpenEl = document.querySelector(`#only-unmapped-sub-${grade}`);
+    const onlyOpen = onlyOpenEl ? onlyOpenEl.checked : false;
+    const grouped = grade === "ef" ? state.subjects_grouped_ef : state.subjects_grouped_q1;
+    const mapped = grade === "ef" ? state.courses_ef : state.courses_q1;
+    subTB.innerHTML = "";
+    Object.keys(grouped).sort().forEach(nk => {
+      const isMapped = Object.prototype.hasOwnProperty.call(mapped, nk);
+      if (onlyOpen && isMapped) return;
+      subTB.insertAdjacentHTML("beforeend", rowHTML(nk, grouped[nk], mapped[nk] || "", isMapped));
+    });
+    if (!subTB.children.length) subTB.innerHTML = `<tr class="empty-row"><td colspan="2">Alles erledigt</td></tr>`;
+  };
+  renderGrade("ef");
+  renderGrade("q1");
+  const onlyOpenRmEl = $("#only-unmapped-room");
+  const onlyOpenRm = onlyOpenRmEl ? onlyOpenRmEl.checked : false;
   const rmTB = $("#room-table tbody");
-  rmTB.innerHTML = "";
-  Object.keys(state.rooms_grouped).sort().forEach(nk=>{
-    const isMapped = Object.prototype.hasOwnProperty.call(state.rooms, nk);
-    if (onlyOpenRm && isMapped) return;
-    rmTB.insertAdjacentHTML(
-      "beforeend",
-      rowHTML(nk, state.rooms_grouped[nk], state.rooms[nk] || "", isMapped)
-    );
-  });
-  if (!rmTB.children.length) rmTB.innerHTML = `<tr class="empty-row"><td colspan="2">Alles erledigt 🎉</td></tr>`;
+  if (rmTB){
+    rmTB.innerHTML = "";
+    Object.keys(state.rooms_grouped).sort().forEach(nk=>{
+      const isMapped = Object.prototype.hasOwnProperty.call(state.rooms, nk);
+      if (onlyOpenRm && isMapped) return;
+      rmTB.insertAdjacentHTML(
+        "beforeend",
+        rowHTML(nk, state.rooms_grouped[nk], state.rooms[nk] || "", isMapped)
+      );
+    });
+    if (!rmTB.children.length) rmTB.innerHTML = `<tr class="empty-row"><td colspan="2">Alles erledigt</td></tr>`;
+  }
 }
 
 function renderUsers(){
   const tbody = $("#user-table tbody");
   tbody.innerHTML = "";
   if (!state.users.length){
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">Noch keine Benutzer angelegt.</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="2">Noch keine Benutzer angelegt.</td></tr>`;
     return;
   }
   state.users.forEach(user => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${user.username}</td>
-      <td>${user.password || "—"}</td>
       <td class="actions"><button class="danger" data-user="${user.id}">Löschen</button></td>
     `;
     tbody.appendChild(tr);
@@ -399,19 +435,19 @@ function renderSettings(){
   const bannerText = document.getElementById("bannerText");
   const bannerEnabled = document.getElementById("bannerEnabled");
   if (!slider || !label) return;
-  const raw = state.settings?.timeColumnWidth ?? "60";
+  const raw = state.settings && state.settings.timeColumnWidth ? state.settings.timeColumnWidth : "60";
   const display = String(raw);
   slider.value = display;
   label.textContent = `${display} px`;
-  if (bannerText) bannerText.value = state.settings?.updateBannerText ?? "";
+  if (bannerText) bannerText.value = (state.settings && state.settings.updateBannerText) || "";
   if (bannerEnabled) {
-    const enabledRaw = state.settings?.updateBannerEnabled ?? "0";
+    const enabledRaw = (state.settings && state.settings.updateBannerEnabled) || "0";
     bannerEnabled.checked = String(enabledRaw).trim().toLowerCase() === "1" || String(enabledRaw).trim().toLowerCase() === "true";
   }
 }
 
 async function save(kind){
-  const tableId = kind === "courses" ? "sub-table" : "room-table";
+  const tableId = kind === "courses_ef" ? "sub-table-ef" : kind === "courses_q1" ? "sub-table-q1" : "room-table";
   const inputs = $$("#"+tableId+" input.map");
   const out = {};
   for (const inp of inputs) out[inp.dataset.nk] = inp.value;
@@ -425,17 +461,28 @@ async function save(kind){
   else { alert(j.error||"Fehler beim Speichern"); }
 }
 
-$("#save-sub").onclick = () => save("courses");
-$("#save-room").onclick = () => save("rooms");
-$("#only-unmapped-sub").onchange = renderTables;
-$("#only-unmapped-room").onchange = renderTables;
+const btnSaveEf = document.getElementById("save-sub-ef");
+const btnSaveQ1 = document.getElementById("save-sub-q1");
+const btnSaveRm = document.getElementById("save-room");
+if (btnSaveEf) btnSaveEf.onclick = () => save("courses_ef");
+if (btnSaveQ1) btnSaveQ1.onclick = () => save("courses_q1");
+if (btnSaveRm) btnSaveRm.onclick = () => save("rooms");
+const chkOpenEf = document.getElementById("only-unmapped-sub-ef");
+const chkOpenQ1 = document.getElementById("only-unmapped-sub-q1");
+const chkOpenRm = document.getElementById("only-unmapped-room");
+if (chkOpenEf) chkOpenEf.onchange = renderTables;
+if (chkOpenQ1) chkOpenQ1.onchange = renderTables;
+if (chkOpenRm) chkOpenRm.onchange = renderTables;
 
-$("#user-table").addEventListener("click", async (ev) => {
+const userTable = document.getElementById("user-table");
+if (userTable) userTable.addEventListener("click", async (ev) => {
   const btn = ev.target.closest("button[data-user]");
   if (!btn) return;
   const userId = Number.parseInt(btn.dataset.user, 10);
   if (!Number.isFinite(userId)) return;
-  const username = btn.closest("tr")?.children[0]?.textContent?.trim() || "";
+  const row = btn.closest("tr");
+  const usernameCell = row && row.children && row.children[0];
+  const username = usernameCell && usernameCell.textContent ? usernameCell.textContent.trim() : "";
   if (!confirm(`Benutzer „${username || userId}“ wirklich löschen?`)) return;
   btn.disabled = true;
   try {
@@ -450,12 +497,15 @@ $("#user-table").addEventListener("click", async (ev) => {
   }
 });
 
-$("#vacation-table").addEventListener("click", async (ev) => {
+const vacationTable = document.getElementById("vacation-table");
+if (vacationTable) vacationTable.addEventListener("click", async (ev) => {
   const btn = ev.target.closest("button[data-vac]");
   if (!btn) return;
   const vacId = Number.parseInt(btn.dataset.vac, 10);
   if (!Number.isFinite(vacId)) return;
-  const name = btn.closest("tr")?.children[0]?.textContent?.trim() || "";
+  const vacRow = btn.closest("tr");
+  const nameCell = vacRow && vacRow.children && vacRow.children[0];
+  const name = nameCell && nameCell.textContent ? nameCell.textContent.trim() : "";
   if (!confirm(`Ferien „${name || vacId}“ wirklich löschen?`)) return;
   btn.disabled = true;
   try {
@@ -471,11 +521,14 @@ $("#vacation-table").addEventListener("click", async (ev) => {
 });
 
 const vacForm = $("#vacation-form");
-vacForm?.addEventListener("submit", async (ev) => {
+if (vacForm) vacForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const title = $("#vac-title").value.trim();
-  const start = $("#vac-start").value;
-  const end = $("#vac-end").value;
+  const titleInput = document.getElementById("vac-title");
+  const startInput = document.getElementById("vac-start");
+  const endInput = document.getElementById("vac-end");
+  const title = titleInput ? titleInput.value.trim() : "";
+  const start = startInput ? startInput.value : "";
+  const end = endInput ? endInput.value : "";
   if (!title || !start){
     alert("Bitte Titel und Startdatum angeben.");
     return;
@@ -503,18 +556,27 @@ vacForm?.addEventListener("submit", async (ev) => {
 });
 
 const examForm = $("#exam-form");
-examForm?.addEventListener("submit", async (ev) => {
+if (examForm) examForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  const subjInp = document.getElementById("exam-subject");
+  const nameInp = document.getElementById("exam-name");
+  const dateInp = document.getElementById("exam-date");
+  const startInp = document.getElementById("exam-start");
+  const endInp = document.getElementById("exam-end");
+  const classesInp = document.getElementById("exam-classes");
+  const teachersInp = document.getElementById("exam-teachers");
+  const roomInp = document.getElementById("exam-room");
+  const noteInp = document.getElementById("exam-note");
   const payload = {
-    subject: $("#exam-subject")?.value || "",
-    name: $("#exam-name")?.value || "",
-    date: $("#exam-date")?.value || "",
-    start_time: $("#exam-start")?.value || "",
-    end_time: $("#exam-end")?.value || "",
-    classes: parseList($("#exam-classes")?.value || ""),
-    teachers: parseList($("#exam-teachers")?.value || ""),
-    room: $("#exam-room")?.value || "",
-    note: $("#exam-note")?.value || "",
+    subject: subjInp ? subjInp.value : "",
+    name: nameInp ? nameInp.value : "",
+    date: dateInp ? dateInp.value : "",
+    start_time: startInp ? startInp.value : "",
+    end_time: endInp ? endInp.value : "",
+    classes: parseList(classesInp ? classesInp.value : ""),
+    teachers: parseList(teachersInp ? teachersInp.value : ""),
+    room: roomInp ? roomInp.value : "",
+    note: noteInp ? noteInp.value : "",
   };
   const btn = examForm.querySelector("button[type='submit']");
   btn.disabled = true;
@@ -589,7 +651,7 @@ const backupUploadBtn = document.getElementById("backup-upload");
 const backupStatus = document.getElementById("backup-status");
 const setBackupStatus = (msg) => { if (backupStatus) backupStatus.textContent = msg || ""; };
 
-backupDownloadBtn?.addEventListener("click", async () => {
+if (backupDownloadBtn) backupDownloadBtn.addEventListener("click", async () => {
   backupDownloadBtn.disabled = true;
   setBackupStatus("Backup wird erstellt...");
   try {
@@ -608,17 +670,18 @@ backupDownloadBtn?.addEventListener("click", async () => {
     URL.revokeObjectURL(url);
     setBackupStatus("Backup gespeichert.");
   } catch (err) {
-    alert(err?.message || "Backup-Download fehlgeschlagen.");
+    const msg = err && err.message ? err.message : "Backup-Download fehlgeschlagen.";
+    alert(msg);
     setBackupStatus("Backup-Download fehlgeschlagen.");
   } finally {
     backupDownloadBtn.disabled = false;
   }
 });
 
-backupUploadBtn?.addEventListener("click", async () => {
-  const file = backupFileInput?.files?.[0];
+if (backupUploadBtn) backupUploadBtn.addEventListener("click", async () => {
+  const file = backupFileInput && backupFileInput.files ? backupFileInput.files[0] : null;
   if (!file){
-    alert("Bitte eine Backup-Datei auswaehlen.");
+    alert("Bitte eine Backup-Datei auswählen.");
     return;
   }
   let parsed;
@@ -626,7 +689,7 @@ backupUploadBtn?.addEventListener("click", async () => {
     const text = await file.text();
     parsed = JSON.parse(text);
   } catch {
-    alert("Die Datei ist kein gueltiges JSON.");
+    alert("Die Datei ist kein gültiges JSON.");
     return;
   }
   if (!confirm("Alle vorhandenen Daten werden ersetzt. Fortfahren?")) return;
@@ -646,7 +709,8 @@ backupUploadBtn?.addEventListener("click", async () => {
     if (backupFileInput) backupFileInput.value = "";
     loadState();
   } catch (err) {
-    alert(err?.message || "Backup-Import fehlgeschlagen.");
+    const msg = err && err.message ? err.message : "Backup-Import fehlgeschlagen.";
+    alert(msg);
     setBackupStatus("Backup-Import fehlgeschlagen.");
   } finally {
     backupUploadBtn.disabled = false;

@@ -17,6 +17,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 LAST_GOOD_PATH = "last_good_timetable.json"
 LAST_GOOD = None
 LAST_GOOD_TS = 0
+LAST_BACKUP_PATH = "last_backup.json"
 
 def no_store(resp):
     resp.headers["Cache-Control"] = "no-store"
@@ -36,9 +37,34 @@ def load_last_good():
 def save_last_good(payload):
     try:
         with open(LAST_GOOD_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
+            json.dump(payload, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+def _save_last_backup(payload: dict) -> None:
+    """Persist the last imported backup so we can fall back to it for profiles."""
+    try:
+        with open(LAST_BACKUP_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def _backup_profile_for(username: str) -> dict | None:
+    """Return profile from last saved backup for a given username (if present)."""
+    try:
+        if not os.path.exists(LAST_BACKUP_PATH):
+            return None
+        with open(LAST_BACKUP_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        users = data.get("database", {}).get("users", [])
+        for u in users:
+            if str(u.get("username") or "").strip() == username:
+                prof = u.get("profile")
+                if isinstance(prof, dict):
+                    return _normalise_profile(prof)
+        return None
+    except Exception:
+        return None
 
 load_last_good()
 
@@ -252,6 +278,43 @@ def _normalise_courses(value):
         out.append(key)
     return out
 
+def _grade_prefixed_courses(values: list[str]) -> list[str]:
+    """Normalise courses and add EF:/Q1: prefix when grade can be inferred from mappings."""
+    if not isinstance(values, list):
+        return []
+    courses_ef = _course_map_normalized_for_grade("EF")
+    courses_q1 = _course_map_normalized_for_grade("Q1")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        if not isinstance(item, str):
+            item = str(item or "")
+        raw = item.strip()
+        if not raw:
+            continue
+        upper = raw.upper()
+        if upper.startswith("EF:") or upper.startswith("Q1:"):
+            key = raw
+        else:
+            nk = norm_key(raw)
+            key = None
+            if nk:
+                in_ef = nk in courses_ef
+                in_q1 = nk in courses_q1
+                if in_ef and not in_q1:
+                    key = f"EF:{nk}"
+                elif in_q1 and not in_ef:
+                    key = f"Q1:{nk}"
+                elif in_ef and in_q1:
+                    key = f"EF:{nk}"  # ambiguous: default EF
+            if key is None:
+                key = raw
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
 def _normalise_klausuren(items):
     if not isinstance(items, list):
         return []
@@ -319,6 +382,25 @@ def _normalise_profile(payload):
     profile["colors"] = _normalise_colors(payload.get("colors"))
     return profile
 
+def _ensure_grade_prefix(courses: list[str], default_grade: str = "EF") -> list[str]:
+    """If no grade prefixes are present, prefix all courses with the given default grade."""
+    if not isinstance(courses, list):
+        return []
+    has_prefix = any(isinstance(c, str) and c.strip().upper().startswith(("EF:", "Q1:")) for c in courses)
+    out: list[str] = []
+    for c in courses:
+        if not isinstance(c, str):
+            c = str(c or "")
+        raw = c.strip()
+        if not raw:
+            continue
+        if has_prefix:
+            out.append(raw)
+            continue
+        nk = norm_key(raw)
+        out.append(f"{default_grade}:{nk}" if nk else raw)
+    return out
+
 def _load_profile_for_user(row):
     if not row:
         return _empty_profile()
@@ -327,7 +409,9 @@ def _load_profile_for_user(row):
         payload = json.loads(raw) if raw else {}
     except (TypeError, json.JSONDecodeError):
         payload = {}
-    return _normalise_profile(payload)
+    prof = _normalise_profile(payload)
+    prof["courses"] = _ensure_grade_prefix(prof.get("courses") or [], "EF")
+    return prof
 
 def _get_setting(key, default=None):
     db = get_db()
@@ -447,7 +531,7 @@ def norm_key(s: str) -> str:
     s = re.sub(r"\s+", " ", s)
     s = s.replace("(", " ").replace(")", " ")  # keep inner text
     s = re.sub(r"[-–—]+", " ", s)       # replace hyphen-like chars
-    s = re.sub(r"\b(gk|lk|ag)\b", " ", s)   # simple tags
+    # keep GK/LK/AG markers to distinguish course types (previously stripped)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -459,8 +543,10 @@ def _no_store(resp):
     resp.headers["Pragma"] = "no-cache"
     return resp
 
-# ---------- Mapping I/O ----------
-COURSE_MAP_PATH = os.path.join(DATA_DIR, "course_mapping.txt")
+#  ---------- Mapping I/O ----------
+COURSE_MAP_PATH_EF = os.path.join(ROOT, "course_mapping_ef.txt")
+COURSE_MAP_PATH_Q1 = os.path.join(ROOT, "course_mapping_q1.txt")
+COURSE_MAP_PATHS   = {"EF": COURSE_MAP_PATH_EF, "Q1": COURSE_MAP_PATH_Q1}
 ROOM_MAP_PATH   = os.path.join(DATA_DIR, "rooms_mapping.txt")
 LEGACY_COURSE_MAP_PATH = os.path.join(DATA, "course_mapping.txt")
 LEGACY_ROOM_MAP_PATH   = os.path.join(DATA, "rooms_mapping.txt")
@@ -476,7 +562,8 @@ def _bootstrap_data_file(preferred: str, legacy: str | None = None) -> None:
         except Exception:
             pass
 
-_bootstrap_data_file(COURSE_MAP_PATH, LEGACY_COURSE_MAP_PATH)
+for _p in COURSE_MAP_PATHS.values():
+    _bootstrap_data_file(_p, LEGACY_COURSE_MAP_PATH)
 _bootstrap_data_file(ROOM_MAP_PATH, LEGACY_ROOM_MAP_PATH)
 
 def _mirror_to_legacy(source: str, legacy: str | None = None) -> None:
@@ -489,7 +576,8 @@ def _mirror_to_legacy(source: str, legacy: str | None = None) -> None:
     except Exception:
         pass
 
-_mirror_to_legacy(COURSE_MAP_PATH, LEGACY_COURSE_MAP_PATH)
+for _p in COURSE_MAP_PATHS.values():
+    _mirror_to_legacy(_p, LEGACY_COURSE_MAP_PATH)
 _mirror_to_legacy(ROOM_MAP_PATH, LEGACY_ROOM_MAP_PATH)
 
 def _load_raw_subjects_for_grade(grade: str) -> list[str]:
@@ -523,36 +611,73 @@ def _load_cached_lessons_for_grade(grade: str) -> list[dict]:
     return []
 
 def load_mapping_txt(path):
-    """Return dict {lhs(normalized or raw key): rhs(display)} including empty rhs."""
-    data = {}
+    """Return dict {lhs(normalized or raw key): rhs(display)} including empty rhs.
+
+    Supports both key=value (legacy) and JSON with top-level grade blocks:
+    {"EF": { raw: label, ... }, "Q1": {...}}
+    """
+    data: dict[str, str] = {}
     try:
         with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                s = line.strip()
-                if not s or s.startswith("#"):
-                    continue
-                if "=" not in s:
-                    continue
-                lhs, rhs = s.split("=", 1)
-                lhs = lhs.strip()
-                rhs = rhs.strip()
-                data[lhs] = rhs
+            content = f.read()
+        stripped = content.lstrip()
+        # JSON grade-aware format
+        if stripped.startswith("{") and ":" in stripped:
+            try:
+                obj = json.loads(content)
+                if isinstance(obj, dict):
+                    for grade, mapping in obj.items():
+                        if not isinstance(mapping, dict):
+                            continue
+                        for lhs, rhs in mapping.items():
+                            key = f"{grade}:{lhs}".strip()
+                            data[key] = str(rhs or "").strip()
+                    return data
+            except Exception:
+                pass  # fall back to legacy parsing
+        # legacy key=value lines
+        for line in content.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or "=" not in s:
+                continue
+            lhs, rhs = s.split("=", 1)
+            lhs = lhs.strip()
+            rhs = rhs.strip()
+            data[lhs] = rhs
     except FileNotFoundError:
         pass
     return data
 
 def _parse_mapping(file_path: str) -> dict[str, str]:
-    """Read key=value lines; index by normalised key on the left. Empty right is allowed."""
+    """Read mapping file; index by normalised key on the left. Empty right is allowed.
+
+    Supports legacy key=value and JSON grade blocks; for grade blocks the grade
+    prefix is ignored for subject mapping, we index by normalised raw label only.
+    """
     mapping: dict[str, str] = {}
     if not os.path.exists(file_path):
         return mapping
     with open(file_path, "r", encoding="utf-8") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            left, right = line.split("=", 1)
-            mapping[norm_key(left)] = right.strip()
+        content = f.read()
+    stripped = content.lstrip()
+    if stripped.startswith("{") and ":" in stripped:
+        try:
+            obj = json.loads(content)
+            if isinstance(obj, dict):
+                for grade_map in obj.values():
+                    if not isinstance(grade_map, dict):
+                        continue
+                    for left, right in grade_map.items():
+                        mapping[norm_key(left)] = str(right or "").strip()
+                return mapping
+        except Exception:
+            pass
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        left, right = line.split("=", 1)
+        mapping[norm_key(left)] = right.strip()
     return mapping
 
 def _write_mapping_txt(path: str, mapping: dict[str, str]) -> None:
@@ -562,6 +687,48 @@ def _write_mapping_txt(path: str, mapping: dict[str, str]) -> None:
         lines.append(f"{nk}={mapping[nk]}")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + ("\n" if lines else ""))
+
+# course mapping helpers (per-grade files, merged views)
+def _course_map_path_for_grade(grade: str) -> str | None:
+    return COURSE_MAP_PATHS.get((grade or "").upper())
+
+def _course_raw_map_for_grade(grade: str) -> dict[str, str]:
+    path = _course_map_path_for_grade(grade)
+    if path:
+        return load_mapping_txt(path)
+    # Unknown grade: do not cross-mix
+    return {}
+
+def _course_map_normalized_for_grade(grade: str) -> dict[str, str]:
+    path = _course_map_path_for_grade(grade)
+    if path:
+        return _parse_mapping(path)
+    return {}
+
+def _course_map_normalized_all() -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for p in COURSE_MAP_PATHS.values():
+        merged.update(_parse_mapping(p))
+    return merged
+
+def _course_map_normalized_for_grade(grade: str) -> dict[str, str]:
+    path = _course_map_path_for_grade(grade)
+    if path:
+        return _parse_mapping(path)
+    return {}
+
+def _course_map_write_all(mapping: dict[str, str]) -> None:
+    for p in COURSE_MAP_PATHS.values():
+        _write_mapping_txt(p, mapping)
+        _mirror_to_legacy(p, LEGACY_COURSE_MAP_PATH)
+
+def _course_map_write_for_grade(grade: str, mapping: dict[str, str]) -> None:
+    """Persist a mapping only for the given grade, with legacy mirror."""
+    path = _course_map_path_for_grade(grade)
+    if not path:
+        return
+    _write_mapping_txt(path, mapping)
+    _mirror_to_legacy(path, LEGACY_COURSE_MAP_PATH)
 
 # ---------- Seen keys (store raw & normalised) ----------
 SEEN_SUB_RAW_PATH = os.path.join(DATA_DIR, "seen_subjects_raw.json")
@@ -745,7 +912,7 @@ def index():
 
 @app.route("/api/mappings")
 def api_mappings():
-    course_map = _parse_mapping(COURSE_MAP_PATH)
+    course_map = _course_map_normalized_all()
     room_map   = _parse_mapping(ROOM_MAP_PATH)
     return _no_store(jsonify({"ok": True, "courses": course_map, "rooms": room_map}))
 
@@ -755,9 +922,7 @@ def api_courses():
 
     Key: grade-prefixed normalised LHS (GRADE:norm_key). Label: RHS if present, else original LHS.
     """
-    raw_map = load_mapping_txt(COURSE_MAP_PATH)  # { raw_left: rhs }
-
-    def _label_for(raw_left: str) -> tuple[str, str] | None:
+    def _label_for(raw_left: str, raw_map: dict[str, str]) -> tuple[str, str] | None:
         left = (raw_left or "").strip()
         label = (raw_map.get(raw_left, "") or "").strip() or left
         nk = norm_key(left)
@@ -765,25 +930,28 @@ def api_courses():
             return None
         return nk, label
 
-    base_options: dict[str, str] = {}
-    for left in raw_map.keys():
-        pair = _label_for(left)
-        if pair:
-            nk, label = pair
-            base_options[nk] = label
+    def _options_for_grade(grade: str) -> dict[str, str]:
+        """Build per-grade options so EF/Q1 stay separated."""
+        opts: dict[str, str] = {}
+        raw_map = _course_raw_map_for_grade(grade)
+        for left in raw_map.keys():
+            pair = _label_for(left, raw_map)
+            if pair:
+                nk, label = pair
+                opts[nk] = label
+        for raw_subj in _load_raw_subjects_for_grade(grade):
+            pair = _label_for(raw_subj, raw_map)
+            if pair:
+                nk, label = pair
+                opts.setdefault(nk, label)
+        return opts
 
     grades = available_grades() or ["EF"]
     items: list[dict] = []
     for grade in grades:
-        # augment with raw subjects per grade if mapping is empty
-        raw_subjects = _load_raw_subjects_for_grade(grade)
-        for raw_subj in raw_subjects:
-            pair = _label_for(raw_subj)
-            if pair:
-                nk, label = pair
-                base_options.setdefault(nk, label)
-        for key in sorted(base_options.keys(), key=lambda k: (base_options[k].lower(), base_options[k])):
-            items.append({"key": f"{grade}:{key}", "label": base_options[key], "grade": grade})
+        grade_opts = _options_for_grade(grade)
+        for key in sorted(grade_opts.keys(), key=lambda k: (grade_opts[k].lower(), grade_opts[k])):
+            items.append({"key": f"{grade}:{key}", "label": grade_opts[key], "grade": grade})
     return _no_store(jsonify({"ok": True, "courses": items}))
 
 @app.route("/api/health")
@@ -797,6 +965,19 @@ def api_update_banner():
 
 @app.route("/api/timetable")
 def api_timetable():
+    try:
+        return _api_timetable_impl()
+    except Exception as exc:
+        app.logger.exception("timetable failed")
+        # Fallback to last good payload if available
+        if LAST_GOOD:
+            fallback = dict(LAST_GOOD)
+            fallback["ok"] = True
+            fallback["error"] = f"served cached timetable because of: {exc}"
+            return _no_store(jsonify(fallback))
+        return jsonify({"ok": False, "error": "timetable_failed"}), 500
+
+def _api_timetable_impl():
     # week selection
     qs = request.args.get("weekStart")
     if qs:
@@ -867,12 +1048,13 @@ def api_timetable():
 
     # optionally enrich with debug mapping fields
     if debug:
-        cmap = _parse_mapping(COURSE_MAP_PATH)
+        # per-lesson mapping lookup by its grade to avoid cross mixing
         rmap = _parse_mapping(ROOM_MAP_PATH)
         for L in lessons:
             sr = (L.get("subject_original") or L.get("subject") or "")
             rr = (L.get("room") or "")
             sn = norm_key(sr); rn = norm_key(rr)
+            cmap = _course_map_normalized_for_grade(L.get("grade"))
             L["debug"] = {
                 "subject_raw": sr, "subject_norm": sn, "mapped_subject": cmap.get(sn),
                 "room_raw": rr,    "room_norm": rn,    "mapped_room": rmap.get(rn),
@@ -890,6 +1072,7 @@ def api_timetable():
     }
     _last_weekkey_payload[weekkey] = payload
     _last_weekkey_ts[weekkey] = time.time()
+    save_last_good({**payload, "_cachedAt": time.time()})
     return _no_store(jsonify(payload))
 
 @app.route("/api/exams")
@@ -1117,9 +1300,16 @@ def api_profile():
         session.pop("user_id", None)
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     if request.method == "GET":
+        profile = _load_profile_for_user(row)
+        # fallback: if empty courses, try last imported backup for this user
+        if not profile.get("courses"):
+            backup_prof = _backup_profile_for(row["username"])
+            if backup_prof:
+                profile = backup_prof
+                _save_profile(user_id, profile)
         payload = {
             "ok": True,
-            "profile": _load_profile_for_user(row),
+            "profile": profile,
             "username": row["username"]
         }
         return _no_store(jsonify(payload))
@@ -1164,12 +1354,13 @@ def _build_backup_payload() -> dict:
             "SELECT id, username, password_hash, password_plain, profile_json, created_at FROM users ORDER BY id"
         )
         for row in cur.fetchall():
+            prof = _load_profile_for_user(row)
             users.append({
                 "id": row["id"],
                 "username": row["username"],
                 "password_hash": row["password_hash"],
                 "password_plain": row["password_plain"],
-                "profile": _load_profile_for_user(row),
+                "profile": prof,
                 "created_at": row["created_at"],
             })
     except Exception:
@@ -1235,7 +1426,10 @@ def _build_backup_payload() -> dict:
             "settings": settings_map,
         },
         "mappings": {
-            "courses": _parse_mapping(COURSE_MAP_PATH),
+            # keep legacy merged view plus grade-specific maps for clarity
+            "courses": _course_map_normalized_all(),
+            "courses_ef": _course_map_normalized_for_grade("EF"),
+            "courses_q1": _course_map_normalized_for_grade("Q1"),
             "rooms": _parse_mapping(ROOM_MAP_PATH),
         },
         "seen": {
@@ -1340,6 +1534,19 @@ def _apply_backup_payload(payload: dict) -> None:
         for k, v in courses.items():
             nk = norm_key(k)
             courses_map[nk] = (v or "").strip()
+    # grade-specific maps, if present (preferred)
+    courses_map_ef = {}
+    courses_map_q1 = {}
+    courses_ef_in = mappings_section.get("courses_ef")
+    courses_q1_in = mappings_section.get("courses_q1")
+    if isinstance(courses_ef_in, dict):
+        for k, v in courses_ef_in.items():
+            nk = norm_key(k)
+            courses_map_ef[nk] = (v or "").strip()
+    if isinstance(courses_q1_in, dict):
+        for k, v in courses_q1_in.items():
+            nk = norm_key(k)
+            courses_map_q1[nk] = (v or "").strip()
 
     rooms_map = {}
     rooms = mappings_section.get("rooms")
@@ -1390,7 +1597,20 @@ def _apply_backup_payload(payload: dict) -> None:
         db.rollback()
         raise
 
-    _write_mapping_txt(COURSE_MAP_PATH, courses_map)
+    # persist last backup for fallback logic
+    _save_last_backup(payload)
+
+    # write courses: prefer grade-specific maps when provided, otherwise legacy merged
+    if courses_map_ef or courses_map_q1:
+        if courses_map_ef:
+            _course_map_write_for_grade("EF", courses_map_ef)
+        if courses_map_q1:
+            _course_map_write_for_grade("Q1", courses_map_q1)
+        # keep legacy merged in sync for fallbacks
+        merged_for_legacy = _course_map_normalized_all()
+        _course_map_write_all(merged_for_legacy)
+    else:
+        _course_map_write_all(courses_map)
     _write_mapping_txt(ROOM_MAP_PATH, rooms_map)
 
     global SEEN_SUBJECTS_RAW, SEEN_ROOMS_RAW, _last_seen_flush
@@ -1434,13 +1654,17 @@ def admin_state():
     if not _require_admin():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
-    courses = _parse_mapping(COURSE_MAP_PATH)
+    courses_ef = _course_map_normalized_for_grade("EF")
+    courses_q1 = _course_map_normalized_for_grade("Q1")
+    courses = _course_map_normalized_all()
     rooms   = _parse_mapping(ROOM_MAP_PATH)
 
-    groups_sub = _group_variants(SEEN_SUBJECTS_RAW)
+    groups_sub_ef = _group_variants(_load_raw_subjects_for_grade("EF"))
+    groups_sub_q1 = _group_variants(_load_raw_subjects_for_grade("Q1"))
     groups_rm  = _group_variants(SEEN_ROOMS_RAW)
 
-    unmapped_sub = [nk for nk in sorted(groups_sub.keys()) if nk not in courses]
+    unmapped_sub_ef = [nk for nk in sorted(groups_sub_ef.keys()) if nk not in courses_ef]
+    unmapped_sub_q1 = [nk for nk in sorted(groups_sub_q1.keys()) if nk not in courses_q1]
     unmapped_rm  = [nk for nk in sorted(groups_rm.keys())  if nk not in rooms]
 
     user_rows = []
@@ -1452,13 +1676,10 @@ def admin_state():
         user_rows = []
         for row in rows:
             username = row["username"] if isinstance(row, dict) else row[1]
-            pwd_plain = row["password_plain"] if isinstance(row, dict) else row[2]
-            pwd_hash = row["password_hash"] if isinstance(row, dict) else row[3]
             uid = row["id"] if isinstance(row, dict) else row[0]
             user_rows.append({
                 "id": uid,
                 "username": username,
-                "password": pwd_plain or pwd_hash,
             })
     except Exception:
         user_rows = []
@@ -1494,11 +1715,15 @@ def admin_state():
 
     return _no_store(jsonify({
         "ok": True,
-        "courses": courses,                # { norm_key: display }
-        "rooms": rooms,                    # { norm_key: display }
-        "subjects_grouped": groups_sub,    # { norm_key: [raw variants…] }
-        "rooms_grouped": groups_rm,        # { norm_key: [raw variants…] }
-        "unmapped_subjects": unmapped_sub,
+        "courses": courses,  # merged legacy view
+        "courses_ef": courses_ef,
+        "courses_q1": courses_q1,
+        "rooms": rooms,
+        "subjects_grouped_ef": groups_sub_ef,
+        "subjects_grouped_q1": groups_sub_q1,
+        "rooms_grouped": groups_rm,
+        "unmapped_subjects_ef": unmapped_sub_ef,
+        "unmapped_subjects_q1": unmapped_sub_q1,
         "unmapped_rooms": unmapped_rm,
         "users": user_rows,
         "vacations": vacations,
@@ -1513,11 +1738,28 @@ def admin_save():
 
     payload = request.get_json(silent=True) or {}
     new_courses: dict = payload.get("courses") or {}
+    new_courses_ef: dict = payload.get("courses_ef") or {}
+    new_courses_q1: dict = payload.get("courses_q1") or {}
     new_rooms: dict   = payload.get("rooms") or {}
     new_settings: dict = payload.get("settings") or {}
 
-    # load current
-    courses = _parse_mapping(COURSE_MAP_PATH)
+    wrote_courses = False
+    # if grade-specific payload present, handle independently; else legacy path applies to both
+    if new_courses_ef or new_courses_q1:
+        courses_ef = _course_map_normalized_for_grade("EF")
+        courses_q1 = _course_map_normalized_for_grade("Q1")
+        for k, v in new_courses_ef.items():
+            courses_ef[norm_key(k)] = (v or "").strip()
+        for k, v in new_courses_q1.items():
+            courses_q1[norm_key(k)] = (v or "").strip()
+        _write_mapping_txt(COURSE_MAP_PATH_EF, courses_ef)
+        _write_mapping_txt(COURSE_MAP_PATH_Q1, courses_q1)
+        _mirror_to_legacy(COURSE_MAP_PATH_EF, LEGACY_COURSE_MAP_PATH)
+        _mirror_to_legacy(COURSE_MAP_PATH_Q1, LEGACY_COURSE_MAP_PATH)
+        wrote_courses = True
+
+    # legacy merge (apply to both grade files)
+    courses = _course_map_normalized_all()
     rooms   = _parse_mapping(ROOM_MAP_PATH)
 
     # merge (normalise keys, keep RHS exactly as typed; empty allowed)
@@ -1526,7 +1768,8 @@ def admin_save():
     for k, v in new_rooms.items():
         rooms[norm_key(k)] = (v or "").strip()
 
-    _write_mapping_txt(COURSE_MAP_PATH, courses)
+    if not wrote_courses:
+        _course_map_write_all(courses)
     _write_mapping_txt(ROOM_MAP_PATH, rooms)
 
     sanitized_settings = {}

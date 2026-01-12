@@ -449,8 +449,7 @@ const normKey = (s) => {
         .replace(/\s+/g, " ")
         .replace(/[()]/g, " ")
         .replace(/[-\u2013\u2014\u2011\u2012\u2212]+/g, " ")
-        .replace(/["'\u00b4`]+/g, " ")
-        .replace(/\b(gk|lk|ag)\b/g, " ");
+        .replace(/["'\u00b4`]+/g, " ");
   return s.replace(/\s+/g, " ").trim();
 };
 
@@ -715,27 +714,51 @@ function mapSubject(lesson) {
 
 // Check whether a lesson matches the currently selected courses (using raw, live and mapped names)
 function lessonMatchesSelection(lesson, selectedSet) {
+
   if (!(selectedSet instanceof Set) || selectedSet.size === 0) return true;
-  const candidates = [];
-  const grade = (lesson?.grade || "").trim();
+
+  const grade = String(lesson?.grade || "").trim().toUpperCase();
+
+  const candidates = new Set();
+
+  const add = (val) => {
+
+    if (!val) return;
+
+    candidates.add(val);
+
+    if (grade && !String(val).toUpperCase().startsWith(`${grade}:`)) {
+
+      candidates.add(`${grade}:${val}`);
+
+    }
+
+  };
+
   const subjOrig = lesson.subject_original ?? "";
+
   const subjLive = lesson.subject ?? "";
-  candidates.push(normKey(subjOrig));
-  candidates.push(normKey(subjLive));
-  const resolved = [
-    resolveCourseKey(subjOrig),
-    resolveCourseKey(subjLive),
-    resolveCourseKey(mapSubject(lesson))
-  ];
-  resolved.forEach(k => { if (k) candidates.push(k); });
-  const selectedBase = new Set(Array.from(selectedSet).map(stripGradePrefix));
-  const hasGradeSelection = Array.from(selectedSet).some(k => typeof k === "string" && k.includes(":"));
+
+  add(normKey(subjOrig));
+
+  add(normKey(subjLive));
+
+  [
+
+    resolveCourseKey(subjOrig, grade),
+
+    resolveCourseKey(subjLive, grade),
+
+    resolveCourseKey(mapSubject(lesson), grade)
+
+  ].forEach(add);
+
   for (const key of candidates) {
-    if (!key) continue;
-    if (grade && selectedSet.has(`${grade}:${key}`)) return true;
-    if (selectedSet.has(key)) return true; // legacy unprefixed stored value
-    if (!hasGradeSelection && selectedBase.has(key)) return true; // only allow cross-grade matching when no grade-specific selection exists
+
+    if (key && selectedSet.has(key)) return true;
+
   }
+
   return false;
 }
 
@@ -745,10 +768,15 @@ function lessonMatchesSelection(lesson, selectedSet) {
 function examCourseKeys(exam){
   const keys = new Set();
   if (!exam || typeof exam !== "object") return keys;
+  const grade = String(exam?.grade || "").trim().toUpperCase();
   const push = (val) => {
     if (!val) return;
-    const key = resolveCourseKey(val) || normKey(val);
-    if (key) keys.add(key);
+    const key = resolveCourseKey(val, grade || gradeFromKey(val)) || normKey(val);
+    if (!key) return;
+    keys.add(key);
+    if (grade && !String(key).toUpperCase().startsWith(`${grade}:`)) {
+      keys.add(`${grade}:${key}`);
+    }
   };
   push(exam.subject);
   push(exam.name);
@@ -767,10 +795,8 @@ function examMatchesSelection(exam, selectedSet){
   if (!(selectedSet instanceof Set) || selectedSet.size === 0) return true;
   const keys = examCourseKeys(exam);
   if (!keys.size) return false;
-  const selectedBase = new Set(Array.from(selectedSet).map(stripGradePrefix));
   for (const key of keys) {
     if (selectedSet.has(key)) return true;
-    if (selectedBase.has(key)) return true;
   }
   return false;
 }
@@ -827,17 +853,6 @@ function renderUpdateBanner(rawBanner){
     if (activeBannerVersion) localStorage.setItem(LS_UPDATE_BANNER, activeBannerVersion);
     wrap.style.display = "none";
   };
-}
-
-async function loadUpdateBannerPublic(){
-  try {
-    const res = await fetch("/api/update-banner", { cache: "no-store" });
-    if (!res.ok) return;
-    const data = await res.json();
-    renderUpdateBanner(data?.updateBanner);
-  } catch (err) {
-    console.warn("Update-banner fetch failed:", err);
-  }
 }
 
 /* ================== KLAUSUREN (Local) ================== */
@@ -976,41 +991,73 @@ const uid = () => Math.random().toString(36).slice(2,10);
 
 /* ============ COURSE OPTIONS from course_mapping.txt ONLY ============ */
 
+const gradeFromKey = (key) => {
+
+  if (!key) return "";
+
+  const s = String(key);
+
+  const i = s.indexOf(":");
+
+  if (i === -1) return "";
+
+  return s.slice(0, i).trim().toUpperCase();
+
+};
+
 let COURSE_OPTIONS = [];
 
 let COURSE_LABEL_BY_KEY = new Map();
 
-let COURSE_GRADE_BY_KEY = new Map();
-
-const stripGradePrefix = (key) => {
-  if (typeof key !== "string") return "";
-  const idx = key.indexOf(":");
-  return idx === -1 ? key.trim() : key.slice(idx + 1).trim();
-};
+let COURSE_KEY_BY_LABEL = new Map(); // keyed by _norm(label) and grade-specific label
 
 
 
 function registerCourseOptions(list) {
 
-  COURSE_OPTIONS = Array.isArray(list) ? list.slice() : [];
+  COURSE_OPTIONS = [];
 
   COURSE_LABEL_BY_KEY = new Map();
 
-  COURSE_GRADE_BY_KEY = new Map();
+  COURSE_KEY_BY_LABEL = new Map();
 
-  COURSE_OPTIONS.forEach(opt => {
+  (Array.isArray(list) ? list : []).forEach(opt => {
 
-    const key = (opt?.key ?? "").trim();
+    const key = String(opt?.key ?? "").trim();
 
     const label = (opt?.label ?? "").trim() || key;
 
-    const grade = (opt?.grade ?? "").trim();
+    const gradeRaw = (opt?.grade ?? gradeFromKey(key) ?? "").trim();
 
     if (!key) return;
 
+    const grade = gradeRaw ? gradeRaw.toUpperCase() : "";
+
+    const normalisedOpt = { key, label, grade };
+
+    COURSE_OPTIONS.push(normalisedOpt);
+
     COURSE_LABEL_BY_KEY.set(key, label);
 
-    COURSE_GRADE_BY_KEY.set(key, grade);
+    const normLabel = _norm(label);
+
+    if (normLabel) {
+
+      const gradeLabelKey = grade ? `${grade}::${normLabel}` : null;
+
+      if (gradeLabelKey && !COURSE_KEY_BY_LABEL.has(gradeLabelKey)) {
+
+        COURSE_KEY_BY_LABEL.set(gradeLabelKey, key);
+
+      }
+
+      if (!COURSE_KEY_BY_LABEL.has(normLabel)) {
+
+        COURSE_KEY_BY_LABEL.set(normLabel, key);
+
+      }
+
+    }
 
   });
 
@@ -1050,13 +1097,9 @@ async function loadCourseOptionsFromTxt() {
 
         if (!lhs) return;
 
-        const gradeLabel = "EF";
+        const key = normKey(lhs);
 
-        const keyBase = normKey(lhs);
-
-        if (!keyBase) return;
-
-        const key = `${gradeLabel}:${keyBase}`;
+        if (!key) return;
 
         const label = rhs || lhs;
 
@@ -1074,9 +1117,7 @@ async function loadCourseOptionsFromTxt() {
 
     .map(([key, label]) => {
 
-      const idx = key.indexOf(":");
-
-      const grade = idx !== -1 ? key.slice(0, idx) : "EF";
+      const grade = gradeFromKey(key);
 
       return { key, label, grade };
 
@@ -1104,17 +1145,33 @@ async function loadCourseOptions() {
 
         const opts = j.courses
 
-          .map(c => ({
-            key: String(c.key || "").trim(),
-            label: String(c.label || "").trim() || String(c.key || ""),
-            grade: String(c.grade || "").trim()
-          }))
+          .map(c => {
+
+            const key = String(c.key || "").trim();
+
+            const label = String(c.label || "").trim() || key;
+
+            const gradeRaw = String(c.grade || gradeFromKey(key) || "").trim();
+
+            const grade = gradeRaw ? gradeRaw.toUpperCase() : "";
+
+            return { key, label, grade };
+
+          })
 
           .filter(opt => opt.key);
 
         if (opts.length) {
 
-          opts.sort((a,b)=>a.label.localeCompare(b.label,'de'));
+          opts.sort((a,b)=>{
+
+            const lbl = a.label.localeCompare(b.label,'de');
+
+            if (lbl !== 0) return lbl;
+
+            return (a.grade || "").localeCompare(b.grade || "");
+
+          });
 
           registerCourseOptions(opts);
 
@@ -1140,7 +1197,7 @@ async function loadCourseOptions() {
 
 
 
-function resolveCourseKey(value) {
+function resolveCourseKey(value, gradeHint = "") {
 
   if (!value) return null;
 
@@ -1148,7 +1205,49 @@ function resolveCourseKey(value) {
 
   if (!trimmed) return null;
 
+  const grade = String(gradeHint || "").trim().toUpperCase();
+
   if (COURSE_LABEL_BY_KEY.has(trimmed)) return trimmed;
+
+  if (grade) {
+
+    const prefixed = `${grade}:${trimmed}`;
+
+    if (COURSE_LABEL_BY_KEY.has(prefixed)) return prefixed;
+
+  }
+
+  const normLabel = _norm(trimmed);
+
+  if (normLabel) {
+
+    if (grade) {
+
+      const gradeLabelKey = `${grade}::${normLabel}`;
+
+      if (COURSE_KEY_BY_LABEL.has(gradeLabelKey)) return COURSE_KEY_BY_LABEL.get(gradeLabelKey);
+
+    }
+
+    if (COURSE_KEY_BY_LABEL.has(normLabel)) return COURSE_KEY_BY_LABEL.get(normLabel);
+
+  }
+
+  const nk = normKey(trimmed);
+
+  if (nk) {
+
+    if (grade) {
+
+      const gradeNk = `${grade}:${nk}`;
+
+      if (COURSE_LABEL_BY_KEY.has(gradeNk)) return gradeNk;
+
+    }
+
+    if (COURSE_LABEL_BY_KEY.has(nk)) return nk;
+
+  }
 
   return null;
 
@@ -1166,7 +1265,9 @@ function normaliseCourseSelection(values) {
 
   values.forEach(v => {
 
-    const key = resolveCourseKey(typeof v === "string" ? v : "");
+    const raw = typeof v === "string" ? v : "";
+
+    const key = resolveCourseKey(raw, gradeFromKey(raw));
 
     if (!key) { changed = true; return; }
 
@@ -2648,77 +2749,305 @@ async function buildCourseSelection(allLessons) {
 
 
 
-  box.innerHTML = "";
+  const lessonGrades = new Set();
 
-  const grouped = new Map();
-  options.forEach(opt => {
-    const grade = (opt.grade || "Andere").toString();
-    if (!grouped.has(grade)) grouped.set(grade, []);
-    grouped.get(grade).push(opt);
-  });
-  const orderedGrades = Array.from(grouped.keys()).sort((a,b)=>a.localeCompare(b,"de"));
-  const selects = [];
+  if (Array.isArray(allLessons)) {
 
-  const updateWarning = () => {
-    if (!warnEl) return;
-    const pickedGrades = selects
-      .map(sel => ({ grade: sel.dataset.grade || "", count: Array.from(sel.selectedOptions || []).length }))
-      .filter(entry => entry.count > 0)
-      .map(entry => entry.grade || "Unbekannt");
-    const unique = new Set(pickedGrades);
-    if (unique.size > 1) {
-      warnEl.textContent = "Achtung: EF und Q1 gleichzeitig gewaehlt. Bitte nur eine Stufe waehlen, sonst doppelte Eintraege.";
-      warnEl.style.display = "block";
-    } else {
-      warnEl.style.display = "none";
-    }
-  };
+    allLessons.forEach(l => {
 
-  orderedGrades.forEach((grade) => {
-    const list = grouped.get(grade) || [];
-    const section = document.createElement("div");
-    section.className = "course-group";
+      const g = String(l?.grade || "").trim().toUpperCase();
 
-    const title = document.createElement("div");
-    title.className = "course-group-title";
-    title.textContent = grade;
-    section.appendChild(title);
+      if (g) lessonGrades.add(g);
 
-    const select = document.createElement("select");
-    select.multiple = true;
-    select.dataset.grade = grade;
-    select.size = Math.min(10, Math.max(5, list.length || 5));
-    select.className = "course-select";
-
-    list.sort((a,b)=> (a.label||"").localeCompare(b.label||"", "de"));
-    list.forEach(opt => {
-      const option = document.createElement("option");
-      option.value = opt.key;
-      option.textContent = opt.label || opt.key;
-      if (saved.has(opt.key)) option.selected = true;
-      select.appendChild(option);
     });
 
-    select.addEventListener("change", updateWarning);
+  }
 
-    section.appendChild(select);
-    box.appendChild(section);
-    selects.push(select);
+
+
+  const grouped = new Map();
+
+  options.forEach(opt => {
+
+    const grade = String(opt?.grade || gradeFromKey(opt?.key) || "").trim().toUpperCase();
+
+    const key = grade || "";
+
+    if (!grouped.has(key)) grouped.set(key, []);
+
+    grouped.get(key).push(opt);
+
   });
 
-  updateWarning();
+
+
+  lessonGrades.forEach(g => { if (!grouped.has(g)) grouped.set(g, []); });
+
+
+
+  grouped.forEach(list => list.sort((a,b)=>a.label.localeCompare(b.label,'de')));
+
+
+
+  const gradeOrder = Array.from(grouped.keys()).sort((a, b) => {
+
+    const pref = ["EF", "Q1", "Q2"];
+
+    const ia = pref.indexOf(a);
+
+    const ib = pref.indexOf(b);
+
+    if (ia !== -1 || ib !== -1) {
+
+      if (ia === -1) return 1;
+
+      if (ib === -1) return -1;
+
+      return ia - ib;
+
+    }
+
+    if (!a && b) return 1;
+
+    if (!b && a) return -1;
+
+    return (a || "").localeCompare(b || "", "de");
+
+  });
+
+
+
+  box.innerHTML = "";
+
+  if (!gradeOrder.length) {
+
+    box.innerHTML = '<div class="muted">Keine Kursoptionen geladen.</div>';
+
+  } else {
+
+    const panels = [];
+
+    const updateSelectionWarning = () => {
+
+      if (!warnEl) return;
+
+      const selectedInputs = [...box.querySelectorAll("input[type=checkbox]:checked")];
+
+      const byGrade = new Map();
+
+      selectedInputs.forEach(inp => {
+
+        const val = String(inp.value || "");
+
+        const grade = gradeFromKey(val) || String(inp.dataset.grade || inp.closest("[data-grade]")?.dataset.grade || "").trim().toUpperCase();
+
+        if (!grade) return;
+
+        byGrade.set(grade, (byGrade.get(grade) || 0) + 1);
+
+      });
+
+      const grades = Array.from(byGrade.keys());
+
+      if (grades.length <= 1) {
+
+        warnEl.style.display = "none";
+
+        warnEl.innerHTML = "";
+
+        return;
+
+      }
+
+      warnEl.style.display = "block";
+
+      warnEl.innerHTML = `
+        <strong>Hinweis:</strong> EF und Q1 gleichzeitig ausgewählt. Bitte nur eine Stufe wählen, sonst riskierst du doppelte Einträge.<br>
+        <div class="warning-actions">
+          <button type="button" data-keep="EF">Nur EF behalten</button>
+          <button type="button" data-keep="Q1">Nur Q1 behalten</button>
+        </div>
+      `;
+
+      warnEl.querySelectorAll("button[data-keep]").forEach(btn => {
+
+        btn.onclick = () => {
+
+          const keep = String(btn.dataset.keep || "").trim().toUpperCase();
+
+          [...box.querySelectorAll("input[type=checkbox]")].forEach(inp => {
+
+            const val = String(inp.value || "");
+
+            const g = gradeFromKey(val) || String(inp.dataset.grade || inp.closest("[data-grade]")?.dataset.grade || "").trim().toUpperCase();
+
+            if (g && keep && g !== keep) inp.checked = false;
+
+          });
+
+          panels.forEach(p => p.updateCount());
+
+          updateSelectionWarning();
+
+        };
+
+      });
+
+    };
+
+    const openPanel = (panel) => {
+
+      panels.forEach(p => {
+
+        const active = panel && p === panel;
+
+        p.body.style.display = active ? "block" : "none";
+
+        p.wrapper.classList.toggle("open", active);
+
+      });
+
+    };
+
+    let defaultOpen = null;
+
+    gradeOrder.forEach(grade => {
+
+      const opts = grouped.get(grade) || [];
+
+      const wrapper = document.createElement("div");
+
+      wrapper.className = "course-group collapsed";
+
+      wrapper.dataset.grade = grade || "";
+
+      const toggle = document.createElement("button");
+
+      toggle.type = "button";
+
+      toggle.className = "course-group-toggle";
+
+      const title = document.createElement("span");
+
+      title.className = "course-group-title";
+
+      title.textContent = grade || "Weitere";
+
+      const chevron = document.createElement("span");
+
+      chevron.className = "course-group-chevron";
+
+      chevron.textContent = "▼";
+
+      const countLabel = document.createElement("span");
+
+      countLabel.className = "course-count";
+
+      toggle.appendChild(title);
+
+      toggle.appendChild(countLabel);
+
+      toggle.appendChild(chevron);
+
+      const body = document.createElement("div");
+
+      body.className = "course-group-body";
+
+      body.style.display = "none";
+
+      const list = document.createElement("div");
+
+      list.className = "course-checklist";
+
+      list.dataset.grade = grade || "";
+
+      if (opts.length === 0) {
+
+        const empty = document.createElement("div");
+
+        empty.className = "muted";
+
+        empty.textContent = "Keine Kurse vorhanden";
+
+        list.appendChild(empty);
+
+      } else {
+
+        opts.forEach(opt => {
+
+          const id = `course_${(grade || "g").toLowerCase()}_${opt.key.replace(/[^a-z0-9]+/gi, "_")}`;
+
+          const label = document.createElement("label");
+
+          label.className = "chk";
+
+          label.innerHTML = `<input type="checkbox" id="${id}" data-grade="${escapeHtml(grade)}" value="${escapeHtml(opt.key)}" ${saved.has(opt.key) ? "checked" : ""}> <span>${escapeHtml(opt.label || opt.key)}</span>`;
+
+          list.appendChild(label);
+
+        });
+
+      }
+
+      body.appendChild(list);
+
+      wrapper.appendChild(toggle);
+
+      wrapper.appendChild(body);
+
+      box.appendChild(wrapper);
+
+      const panel = { wrapper, body, list, countLabel };
+
+      panel.updateCount = () => {
+
+        const selectedCount = [...panel.list.querySelectorAll("input[type=checkbox]:checked")].length;
+
+        panel.countLabel.textContent = selectedCount > 0 ? `${selectedCount} gewählt` : "auswählen";
+
+      };
+
+      panels.push(panel);
+
+      panel.updateCount();
+
+      panel.list.addEventListener("change", () => {
+
+        panel.updateCount();
+
+        updateSelectionWarning();
+
+      });
+
+      toggle.addEventListener("click", () => {
+
+        const isOpen = panel.wrapper.classList.contains("open");
+
+        openPanel(isOpen ? null : panel);
+
+      });
+
+      const hasSelection = opts.some(opt => saved.has(opt.key));
+
+      if (hasSelection && !defaultOpen) defaultOpen = panel;
+
+    });
+
+    updateSelectionWarning();
+
+    openPanel(defaultOpen);
+
+  }
 
 
 
   saveBtn.onclick = () => {
 
-    const selected = [];
+    const selected = [...box.querySelectorAll("input[type=checkbox]:checked")]
 
-    selects.forEach(sel => {
-      Array.from(sel.selectedOptions || []).forEach(opt => {
-        if (opt.value) selected.push(opt.value);
-      });
-    });
+      .map(i => i.value)
+
+      .filter(Boolean);
 
     setCourses(selected);
 
@@ -2764,7 +3093,6 @@ async function buildCourseSelection(allLessons) {
 
 
 
-function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWidth = null) {
 function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWidth = null) {
 
   hideLessonOverlay();
@@ -3114,7 +3442,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
     const room = mapRoom(l);
 
-    const subjKey = resolveCourseKey(subj) || normKey(subj || "");
+    const subjKey = resolveCourseKey(subj, l?.grade) || normKey(subj || "");
 
     const subjColor = subjKey ? subjectColors[subjKey] : null;
 
@@ -3625,9 +3953,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   (async () => {
-
-    // Show update banner even before login/session restore
-    loadUpdateBannerPublic();
 
     try {
 
