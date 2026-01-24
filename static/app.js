@@ -379,6 +379,7 @@ function normaliseExam(rec){
   const subj  = String(rec.subject || rec.subjectName || "").trim();
   const name  = String(rec.name || rec.title || subj || "Klausur").trim();
   const note  = String(rec.note || rec.text || "").trim();
+  const grade = String(rec.grade || "").trim().toUpperCase();
   const roomsRaw = [];
   if (Array.isArray(rec.rooms)) roomsRaw.push(...rec.rooms);
   if (rec.room) roomsRaw.push(...String(rec.room).split(","));
@@ -390,6 +391,7 @@ function normaliseExam(rec){
   const baseId = rec.id;
   return {
     id: baseId != null ? `exam-${baseId}` : uid(),
+    grade,
     subject: subj || name,
     name,
     date,
@@ -958,11 +960,12 @@ const KlausurenStore = {
 function mergeKlausuren(remoteList, localList){
   const byKey = new Map();
   const makeKey = (k) => {
+    const grade = String(k?.grade || "").trim().toUpperCase();
     const subj = normKey(k.subject || k.name || "");
     const date = k.date || "";
     const ps = Number.isFinite(k.periodStart) ? k.periodStart : "";
     const pe = Number.isFinite(k.periodEnd) ? k.periodEnd : ps;
-    return `${date}|${ps}|${pe}|${subj}`;
+    return `${grade}|${date}|${ps}|${pe}|${subj}`;
   };
   (remoteList || []).forEach(k => {
     const key = makeKey(k);

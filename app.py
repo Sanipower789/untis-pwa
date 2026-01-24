@@ -174,10 +174,15 @@ def init_db():
             teachers_json TEXT NOT NULL DEFAULT '[]',
             room TEXT,
             note TEXT,
+            grade TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
+    try:
+        conn.execute("ALTER TABLE exams_manual ADD COLUMN grade TEXT")
+    except sqlite3.OperationalError:
+        pass
     for key, value in SETTINGS_DEFAULTS.items():
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
@@ -194,8 +199,8 @@ def init_db():
             for entry in seed_exams:
                 conn.execute(
                     """
-                    INSERT INTO exams_manual (subject, name, date, start_time, end_time, classes_json, teachers_json, room, note)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO exams_manual (subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, grade)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         entry["subject"],
@@ -207,6 +212,7 @@ def init_db():
                         json.dumps(entry.get("teachers") or []),
                         entry.get("room") or "",
                         entry.get("note") or "",
+                        (entry.get("grade") or "").strip().upper(),
                     )
                 )
     except Exception:
@@ -820,8 +826,13 @@ def _week_key(ws: date) -> str:
 _last_exam_key_ts: dict[str, float] = {}
 _last_exam_payload: dict[str, dict] = {}
 
-def _exam_key(start: date, end: date, exam_type: int) -> str:
-    return f"{start.isoformat()}_{end.isoformat()}_{exam_type}"
+def _exam_key(start: date, end: date, exam_type: int, grades: list[str] | tuple[str, ...] | None = None) -> str:
+    grade_part = "ALL"
+    if grades:
+        norm = {str(g or "").strip().upper() for g in grades if str(g or "").strip()}
+        if norm:
+            grade_part = ",".join(sorted(norm))
+    return f"{start.isoformat()}_{end.isoformat()}_{exam_type}_{grade_part}"
 
 # ---- Manual exams (admin-managed) ----
 def _clean_str(value) -> str:
@@ -855,6 +866,7 @@ def _normalize_manual_exam_input(data: dict) -> dict | None:
     rooms = _split_rooms(room or data.get("rooms") or [])
     room_label = ", ".join(_clean_list_str(rooms) or ([] if not room else [room]))
     note = _clean_str(data.get("note"))
+    grade = _clean_str(data.get("grade")).upper()
     return {
         "subject": subj,
         "name": name,
@@ -866,6 +878,7 @@ def _normalize_manual_exam_input(data: dict) -> dict | None:
         "room": room_label,
         "rooms": _clean_list_str(rooms),
         "note": note,
+        "grade": grade,
     }
 
 def _row_to_manual_exam(row) -> dict:
@@ -890,13 +903,14 @@ def _row_to_manual_exam(row) -> dict:
         "room": row.get("room") or "",
         "rooms": rooms,
         "note": row.get("note") or "",
+        "grade": (row.get("grade") or "").strip().upper(),
         "source": "manual",
     }
 
 def _load_manual_exams(start: date, end: date) -> list[dict]:
     db = get_db()
     rows = db.execute(
-        "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note FROM exams_manual WHERE date BETWEEN ? AND ? ORDER BY date, start_time",
+        "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, grade FROM exams_manual WHERE date BETWEEN ? AND ? ORDER BY date, start_time",
         (start.isoformat(), end.isoformat())
     ).fetchall()
     return [_row_to_manual_exam(dict(r)) for r in rows]
@@ -1081,6 +1095,7 @@ def api_exams():
     start_raw = request.args.get("start")
     end_raw   = request.args.get("end")
     type_raw  = request.args.get("type") or request.args.get("examTypeId") or "0"
+    grade_raw = request.args.get("grade") or request.args.get("grades") or ""
     force     = request.args.get("force") == "1"
 
     start = today
@@ -1103,7 +1118,18 @@ def api_exams():
     except (TypeError, ValueError):
         exam_type = 0
 
-    cache_key = _exam_key(start, end, exam_type)
+    requested_grades: list[str] = []
+    if grade_raw:
+        for part in grade_raw.replace(";", ",").split(","):
+            val = part.strip().upper()
+            if val:
+                requested_grades.append(val)
+    available = available_grades() or ["EF"]
+    grades = [g for g in requested_grades if g in available] if requested_grades else available
+    if not grades:
+        grades = available
+
+    cache_key = _exam_key(start, end, exam_type, grades)
     now_ts = time.time()
     if not force and cache_key in _last_exam_payload and (now_ts - _last_exam_key_ts.get(cache_key, 0)) < 15:
         return _no_store(jsonify(_last_exam_payload[cache_key]))
@@ -1114,31 +1140,7 @@ def api_exams():
     except Exception:
         manual_exams = []
 
-    try:
-        raw_exams = fetch_exams(start, end, exam_type) or []
-        subjects  = fetch_subject_map()
-        classes   = fetch_class_map()
-        teachers  = fetch_teacher_map()
-    except Exception as e:
-        msg = str(e)
-        err_code = "exam_fetch_failed"
-        if "no right" in msg.lower() or "-8509" in msg:
-            err_code = "exam_permission_denied"
-        app.logger.warning("fetch_exams failed: %s", msg)
-        payload = {
-            "ok": True,
-            "warning": msg,
-            "errorCode": err_code,
-            "start": str(start),
-            "end": str(end),
-            "examType": exam_type,
-            "exams": manual_exams,
-        }
-        _last_exam_payload[cache_key] = payload
-        _last_exam_key_ts[cache_key] = time.time()
-        return _no_store(jsonify(payload))
-
-    def _norm_exam(rec):
+    def _norm_exam(rec, grade_label: str, subjects: dict, classes: dict, teachers: dict):
         if not isinstance(rec, dict):
             return None
         eid = rec.get("id") or rec.get("examId") or rec.get("exam_id")
@@ -1178,6 +1180,7 @@ def api_exams():
             eid = f"rest-{date_iso}-{subj_name}-{start_hm}-{end_hm}"
         return {
             "id": eid,
+            "grade": grade_label,
             "date": date_iso,
             "start": start_hm,
             "end": end_hm,
@@ -1193,11 +1196,35 @@ def api_exams():
             "note": rec.get("text") or rec.get("note") or "",
         }
 
-    exams = [_norm_exam(rec) for rec in raw_exams]
-    exams = [e for e in exams if e and e.get("date")]
-    exams = manual_exams + exams
+    exams_remote: list[dict] = []
+    warnings: list[str] = []
+    fetch_failed = False
+    permission_denied = False
+
+    for grade in grades:
+        try:
+            raw_exams = fetch_exams(start, end, exam_type, grade) or []
+            subjects  = fetch_subject_map(grade)
+            classes   = fetch_class_map(grade)
+            teachers  = fetch_teacher_map(grade)
+        except Exception as e:
+            msg = str(e)
+            fetch_failed = True
+            if "no right" in msg.lower() or "-8509" in msg:
+                permission_denied = True
+            warnings.append(f"{grade}: {msg}")
+            app.logger.warning("fetch_exams failed for %s: %s", grade, msg)
+            continue
+
+        normed = [_norm_exam(rec, grade, subjects, classes, teachers) for rec in raw_exams]
+        exams_remote.extend([e for e in normed if e and e.get("date")])
+        try:
+            record_seen_rooms_from_exams(raw_exams)
+        except Exception:
+            pass
+
+    exams = manual_exams + exams_remote
     try:
-        record_seen_rooms_from_exams(raw_exams)
         record_seen_rooms_from_exams(manual_exams)
     except Exception:
         pass
@@ -1207,8 +1234,16 @@ def api_exams():
         "start": str(start),
         "end": str(end),
         "examType": exam_type,
+        "grades": grades,
         "exams": exams,
     }
+    if warnings:
+        payload["warning"] = "; ".join(warnings)
+        payload["warnings"] = warnings
+        if permission_denied:
+            payload["errorCode"] = "exam_permission_denied"
+        elif fetch_failed:
+            payload["errorCode"] = "exam_fetch_failed"
     _last_exam_payload[cache_key] = payload
     _last_exam_key_ts[cache_key] = time.time()
     return _no_store(jsonify(payload))
@@ -1385,7 +1420,7 @@ def _build_backup_payload() -> dict:
     exams_manual = []
     try:
         cur = db.execute(
-            "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, created_at FROM exams_manual ORDER BY date, start_time, id"
+            "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, grade, created_at FROM exams_manual ORDER BY date, start_time, id"
         )
         for row in cur.fetchall():
             exams_manual.append({
@@ -1399,6 +1434,7 @@ def _build_backup_payload() -> dict:
                 "teachers": json.loads(row["teachers_json"] or "[]"),
                 "room": row["room"],
                 "note": row["note"],
+                "grade": str(row["grade"] if "grade" in row.keys() else "").strip().upper(),
                 "created_at": row["created_at"],
             })
     except Exception:
@@ -1526,7 +1562,8 @@ def _apply_backup_payload(payload: dict) -> None:
             room = (entry.get("room") or "").strip()
             note = (entry.get("note") or "").strip()
             created_at = entry.get("created_at") or datetime.utcnow().isoformat()
-            exams_manual_norm.append((exam_id, subj, name, date_iso, start_hm, end_hm, json.dumps(classes), json.dumps(teachers), room, note, created_at))
+            grade = (entry.get("grade") or "").strip().upper()
+            exams_manual_norm.append((exam_id, subj, name, date_iso, start_hm, end_hm, json.dumps(classes), json.dumps(teachers), room, note, grade, created_at))
 
     courses_map = {}
     courses = mappings_section.get("courses")
@@ -1582,7 +1619,7 @@ def _apply_backup_payload(payload: dict) -> None:
 
         for row in exams_manual_norm:
             db.execute(
-                "INSERT INTO exams_manual (id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO exams_manual (id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, grade, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 row
             )
 
@@ -1705,7 +1742,7 @@ def admin_state():
     exams_manual = []
     try:
         cur = get_db().execute(
-            "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note FROM exams_manual ORDER BY date, start_time"
+            "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, grade FROM exams_manual ORDER BY date, start_time"
         )
         exams_manual = [_row_to_manual_exam(dict(r)) for r in cur.fetchall()]
     except Exception:
@@ -1868,7 +1905,7 @@ def admin_exams():
     db = get_db()
     if request.method == "GET":
         rows = db.execute(
-            "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note FROM exams_manual ORDER BY date, start_time"
+            "SELECT id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, grade FROM exams_manual ORDER BY date, start_time"
         ).fetchall()
         items = [_row_to_manual_exam(dict(r)) for r in rows]
         return _no_store(jsonify({"ok": True, "exams": items}))
@@ -1879,8 +1916,8 @@ def admin_exams():
         return jsonify({"ok": False, "error": "invalid_input"}), 400
     db.execute(
         """
-        INSERT INTO exams_manual (subject, name, date, start_time, end_time, classes_json, teachers_json, room, note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO exams_manual (subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, grade)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["subject"],
@@ -1892,6 +1929,7 @@ def admin_exams():
             json.dumps(payload["teachers"]),
             payload["room"],
             payload["note"],
+            payload["grade"],
         )
     )
     db.commit()
