@@ -1,4 +1,4 @@
-import os, json, time, re, sqlite3, shutil
+import os, json, time, re, sqlite3, shutil, requests
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 try:
@@ -91,15 +91,21 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
-app.secret_key = os.environ.get("FLASK_SECRET", os.urandom(24))
-SESSION_LIFETIME_DAYS = os.environ.get("SESSION_LIFETIME_DAYS")
-try:
-    SESSION_LIFETIME_DAYS = int(SESSION_LIFETIME_DAYS) if SESSION_LIFETIME_DAYS else 90
-except Exception:
-    SESSION_LIFETIME_DAYS = 90
-app.permanent_session_lifetime = timedelta(days=SESSION_LIFETIME_DAYS)
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required and must not be empty.")
+app.config["SECRET_KEY"] = SECRET_KEY
+app.config["SESSION_PERMANENT"] = True
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
 ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN")
 DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
+BACKUP_WEBHOOK_URL   = os.environ.get("BACKUP_WEBHOOK_URL")
+BACKUP_WEBHOOK_TOKEN = os.environ.get("BACKUP_WEBHOOK_TOKEN")
+AUTO_RESTORE_URL     = os.environ.get("AUTO_RESTORE_URL")
 SETTINGS_DEFAULTS  = {
     "timeColumnWidth": "60",
     "updateBannerText": "",
@@ -1299,6 +1305,7 @@ def api_auth_register():
         return jsonify({"ok": False, "error": "username_exists"}), 409
     session.permanent = True
     session["user_id"] = new_id
+    _maybe_send_backup("user_register")
     row = _load_user(new_id)
     return _no_store(jsonify(_auth_response(row))), 201
 
@@ -1324,7 +1331,7 @@ def api_auth_login():
 
 @app.route("/api/auth/logout", methods=["POST"])
 def api_auth_logout():
-    session.pop("user_id", None)
+    session.clear()
     return _no_store(jsonify({"ok": True, "authenticated": False}))
 
 @app.route("/api/profile", methods=["GET", "PUT"])
@@ -1351,6 +1358,7 @@ def api_profile():
     data = request.get_json(silent=True) or {}
     profile = _normalise_profile(data)
     _save_profile(user_id, profile)
+    _maybe_send_backup("profile_update")
     return _no_store(jsonify({"ok": True, "profile": profile}))
 
 # ---- Admin auth/UI ----
@@ -1370,7 +1378,7 @@ def admin_login():
 
 @app.route("/admin/logout")
 def admin_logout():
-    session.pop("admin_ok", None)
+    session.clear()
     return redirect(url_for("admin_login"))
 
 @app.route("/admin/mappings")
@@ -1658,11 +1666,56 @@ def _apply_backup_payload(payload: dict) -> None:
     _last_seen_flush = time.time()
 
 
+def _maybe_send_backup(trigger: str = "manual", payload: dict | None = None) -> None:
+    """
+    Push a fresh backup to a webhook if configured (Render free tier loses disk).
+    The call is best-effort and time-limited so API responses are not blocked.
+    """
+    if not BACKUP_WEBHOOK_URL:
+        return
+    try:
+        data = payload or _build_backup_payload()
+        headers = {"User-Agent": "untis-pwa/backup"}
+        if BACKUP_WEBHOOK_TOKEN:
+            headers["Authorization"] = f"Bearer {BACKUP_WEBHOOK_TOKEN}"
+        requests.post(BACKUP_WEBHOOK_URL, json=data, timeout=8, headers=headers)
+    except Exception as exc:
+        app.logger.warning("backup webhook failed (%s): %s", trigger, exc)
+
+
+def _maybe_auto_restore() -> None:
+    """If AUTO_RESTORE_URL is set and DB is empty, pull a backup JSON and restore it."""
+    if not AUTO_RESTORE_URL:
+        return
+    try:
+        cur = get_db().execute("SELECT COUNT(*) FROM users")
+        if cur.fetchone()[0] > 0:
+            return
+    except Exception as exc:
+        app.logger.warning("auto-restore precheck failed: %s", exc)
+        return
+    try:
+        resp = requests.get(AUTO_RESTORE_URL, timeout=20)
+        resp.raise_for_status()
+        _apply_backup_payload(resp.json())
+        app.logger.info("auto-restore from AUTO_RESTORE_URL succeeded")
+    except Exception as exc:
+        app.logger.warning("auto-restore failed: %s", exc)
+
+# Attempt a one-time auto-restore on cold start if the DB is empty
+try:
+    with app.app_context():
+        _maybe_auto_restore()
+except Exception:
+    app.logger.exception("auto-restore hook failed")
+
+
 @app.route("/api/admin/backup")
 def admin_backup():
     if not _require_admin():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     payload = _build_backup_payload()
+    _maybe_send_backup("admin_backup", payload)
     filename = f"untis-backup-{datetime.now(APP_TZ).strftime('%Y%m%d-%H%M%S')}.json"
     resp = make_response(json.dumps(payload, ensure_ascii=False, indent=2))
     resp.headers["Content-Type"] = "application/json"
@@ -1684,6 +1737,7 @@ def admin_restore():
     except Exception:
         app.logger.exception("restore failed")
         return jsonify({"ok": False, "error": "restore_failed"}), 500
+    _maybe_send_backup("admin_restore")
     return _no_store(jsonify({"ok": True}))
 
 @app.route("/api/admin/state")
@@ -1830,6 +1884,7 @@ def admin_save():
     if sanitized_settings:
         _set_settings(sanitized_settings)
 
+    _maybe_send_backup("admin_save")
     return _no_store(jsonify({"ok": True, "saved_courses": len(new_courses), "saved_rooms": len(new_rooms), "saved_settings": len(sanitized_settings)}))
 
 @app.route("/api/admin/vacations", methods=["GET", "POST"])
@@ -1872,6 +1927,7 @@ def admin_vacations():
         (title, start.isoformat(), end.isoformat())
     )
     db.commit()
+    _maybe_send_backup("admin_vacations_create")
     return _no_store(jsonify({"ok": True}))
 
 @app.route("/api/admin/users/<int:user_id>", methods=["DELETE"])
@@ -1884,6 +1940,7 @@ def admin_delete_user(user_id: int):
     db.commit()
     if cur.rowcount == 0:
         return _no_store(jsonify({"ok": False, "error": "not_found"})), 404
+    _maybe_send_backup("admin_user_delete")
     return _no_store(jsonify({"ok": True, "deleted": user_id}))
 
 @app.route("/api/admin/vacations/<int:vac_id>", methods=["DELETE"])
@@ -1895,6 +1952,7 @@ def admin_delete_vacation(vac_id: int):
     db.commit()
     if cur.rowcount == 0:
         return _no_store(jsonify({"ok": False, "error": "not_found"})), 404
+    _maybe_send_backup("admin_vacation_delete")
     return _no_store(jsonify({"ok": True, "deleted": vac_id}))
 
 
@@ -1933,6 +1991,7 @@ def admin_exams():
         )
     )
     db.commit()
+    _maybe_send_backup("admin_exams_create")
     return _no_store(jsonify({"ok": True}))
 
 
@@ -1945,6 +2004,7 @@ def admin_delete_exam(exam_id: int):
     db.commit()
     if cur.rowcount == 0:
         return _no_store(jsonify({"ok": False, "error": "not_found"})), 404
+    _maybe_send_backup("admin_exams_delete")
     return _no_store(jsonify({"ok": True, "deleted": exam_id}))
 
 if __name__ == "__main__":
