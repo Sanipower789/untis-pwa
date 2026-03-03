@@ -48,6 +48,7 @@ function doGet(e) {
 - `BACKUP_WEBHOOK_URL` = Web App deploy URL (use POST).
 - `BACKUP_WEBHOOK_TOKEN` = `SHARED_TOKEN` if you set one (sent as `Authorization: Bearer ...`).
 - `AUTO_RESTORE_URL` = same Web App URL (GET).
+- Optional: `AUTO_BACKUP_INTERVAL_MIN` = minutes between automatic backups (default 5). Requires `BACKUP_WEBHOOK_URL` to be set.
 
 ## Quick tests
 - Local: set `SECRET_KEY`, login, restart server → still logged in; cookie shows HttpOnly/Secure/SameSite=Lax, 30-day expiry.

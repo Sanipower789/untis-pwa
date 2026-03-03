@@ -1,4 +1,4 @@
-import os, json, time, re, sqlite3, shutil, requests
+import os, json, time, re, sqlite3, shutil, requests, threading
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 try:
@@ -106,6 +106,7 @@ DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"
 BACKUP_WEBHOOK_URL   = os.environ.get("BACKUP_WEBHOOK_URL")
 BACKUP_WEBHOOK_TOKEN = os.environ.get("BACKUP_WEBHOOK_TOKEN")
 AUTO_RESTORE_URL     = os.environ.get("AUTO_RESTORE_URL")
+AUTO_BACKUP_INTERVAL_MIN = int(os.environ.get("AUTO_BACKUP_INTERVAL_MIN", "5"))
 SETTINGS_DEFAULTS  = {
     "timeColumnWidth": "60",
     "updateBannerText": "",
@@ -1702,10 +1703,38 @@ def _maybe_auto_restore() -> None:
     except Exception as exc:
         app.logger.warning("auto-restore failed: %s", exc)
 
-# Attempt a one-time auto-restore on cold start if the DB is empty
+
+_auto_backup_started = False
+
+
+def _start_auto_backup_worker():
+    """Fire a daemon thread that pushes backups on a fixed interval (default: 5 min)."""
+    global _auto_backup_started
+    if _auto_backup_started:
+        return
+    if not BACKUP_WEBHOOK_URL or AUTO_BACKUP_INTERVAL_MIN <= 0:
+        return
+    _auto_backup_started = True
+
+    interval = max(1, AUTO_BACKUP_INTERVAL_MIN) * 60
+
+    def _worker():
+        while True:
+            try:
+                with app.app_context():
+                    _maybe_send_backup("auto_timer")
+            except Exception as exc:
+                app.logger.warning("auto-backup loop failed: %s", exc)
+            time.sleep(interval)
+
+    t = threading.Thread(target=_worker, name="auto-backup", daemon=True)
+    t.start()
+
+# Attempt a one-time auto-restore on cold start if the DB is empty, then start periodic backups
 try:
     with app.app_context():
         _maybe_auto_restore()
+        _start_auto_backup_worker()
 except Exception:
     app.logger.exception("auto-restore hook failed")
 
@@ -1716,7 +1745,8 @@ def admin_backup():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     payload = _build_backup_payload()
     _maybe_send_backup("admin_backup", payload)
-    filename = f"untis-backup-{datetime.now(APP_TZ).strftime('%Y%m%d-%H%M%S')}.json"
+    # fixed filename so browser download matches the single-file backup pattern
+    filename = "untis-backup.json"
     resp = make_response(json.dumps(payload, ensure_ascii=False, indent=2))
     resp.headers["Content-Type"] = "application/json"
     resp.headers["Content-Disposition"] = f'attachment; filename=\"{filename}\"'
