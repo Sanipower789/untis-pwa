@@ -10,7 +10,7 @@ if load_dotenv:
     load_dotenv(".env")
 from flask import (
     Flask, jsonify, make_response, render_template, request,
-    redirect, url_for, session, g
+    redirect, url_for, session, g, send_from_directory
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -931,6 +931,11 @@ def add_no_cache(resp):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+@app.route("/sw.js")
+def service_worker():
+    # Serve the PWA service worker from the root path
+    return send_from_directory(app.static_folder, "sw.js", cache_timeout=0)
 
 @app.route("/api/mappings")
 def api_mappings():
