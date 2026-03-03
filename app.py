@@ -103,6 +103,7 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN")
 DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
+AUTO_RESTORE_FORCE   = str(os.environ.get("AUTO_RESTORE_FORCE", "")).strip().lower() in ("1", "true", "yes", "on")
 BACKUP_WEBHOOK_URL   = os.environ.get("BACKUP_WEBHOOK_URL")
 BACKUP_WEBHOOK_TOKEN = os.environ.get("BACKUP_WEBHOOK_TOKEN")
 AUTO_RESTORE_URL     = os.environ.get("AUTO_RESTORE_URL")
@@ -1690,7 +1691,7 @@ def _maybe_auto_restore() -> None:
         return
     try:
         cur = get_db().execute("SELECT COUNT(*) FROM users")
-        if cur.fetchone()[0] > 0:
+        if cur.fetchone()[0] > 0 and not AUTO_RESTORE_FORCE:
             return
     except Exception as exc:
         app.logger.warning("auto-restore precheck failed: %s", exc)
@@ -1719,6 +1720,12 @@ def _start_auto_backup_worker():
     interval = max(1, AUTO_BACKUP_INTERVAL_MIN) * 60
 
     def _worker():
+        # fire one backup immediately, then on interval
+        try:
+            with app.app_context():
+                _maybe_send_backup("auto_timer_initial")
+        except Exception as exc:
+            app.logger.warning("auto-backup initial push failed: %s", exc)
         while True:
             try:
                 with app.app_context():
@@ -1734,6 +1741,7 @@ def _start_auto_backup_worker():
 try:
     with app.app_context():
         _maybe_auto_restore()
+        _maybe_send_backup("startup")
         _start_auto_backup_worker()
 except Exception:
     app.logger.exception("auto-restore hook failed")
