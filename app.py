@@ -105,7 +105,7 @@ ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN")
 DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
 AUTO_RESTORE_FORCE   = str(os.environ.get("AUTO_RESTORE_FORCE", "")).strip().lower() in ("1", "true", "yes", "on")
 BACKUP_WEBHOOK_URL   = os.environ.get("BACKUP_WEBHOOK_URL")
-BACKUP_WEBHOOK_TOKEN = os.environ.get("BACKUP_WEBHOOK_TOKEN")
+BACKUP_WEBHOOK_TOKEN = None  # auth disabled
 AUTO_RESTORE_URL     = os.environ.get("AUTO_RESTORE_URL")
 AUTO_BACKUP_INTERVAL_MIN = int(os.environ.get("AUTO_BACKUP_INTERVAL_MIN", "5"))
 SETTINGS_DEFAULTS  = {
@@ -1683,8 +1683,6 @@ def _maybe_send_backup(trigger: str = "manual", payload: dict | None = None) -> 
     try:
         data = payload or _build_backup_payload()
         headers = {"User-Agent": "untis-pwa/backup"}
-        if BACKUP_WEBHOOK_TOKEN:
-            headers["Authorization"] = f"Bearer {BACKUP_WEBHOOK_TOKEN}"
         requests.post(BACKUP_WEBHOOK_URL, json=data, timeout=8, headers=headers)
     except Exception as exc:
         app.logger.warning("backup webhook failed (%s): %s", trigger, exc)

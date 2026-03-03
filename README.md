@@ -46,7 +46,6 @@ function doGet(e) {
 
 ### Render env for backup
 - `BACKUP_WEBHOOK_URL` = Web App deploy URL (use POST).
-- `BACKUP_WEBHOOK_TOKEN` = `SHARED_TOKEN` if you set one (sent as `Authorization: Bearer ...`).
 - `AUTO_RESTORE_URL` = same Web App URL (GET).
 - Optional: `AUTO_BACKUP_INTERVAL_MIN` = minutes between automatic backups (default 5). Requires `BACKUP_WEBHOOK_URL` to be set.
 - Optional: `AUTO_RESTORE_FORCE` = `1/true` to restore from `AUTO_RESTORE_URL` on every cold start even if the DB already has rows (overwrites existing data).
