@@ -1008,6 +1008,67 @@ const gradeFromKey = (key) => {
 
 };
 
+const LEGACY_GRADE_RE = /\((EF|Q1|Q2)\)\s*$/i;
+
+const compactCourseToken = (value) =>
+  normKey(value)
+    .replace(/[^a-z0-9]+/g, "");
+
+const stripCourseLevelPrefix = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/^(gk|lk)\s+/i, "")
+    .trim();
+
+const stripCourseLevelTokens = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/\b(gk|lk)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+function parseLegacyCourseValue(value, gradeHint = "") {
+  let raw = String(value || "").trim();
+  let grade = String(gradeHint || "").trim().toUpperCase();
+  if (!raw) return { raw: "", grade };
+
+  const prefGrade = gradeFromKey(raw);
+  if (prefGrade) {
+    if (!grade) grade = prefGrade;
+    raw = raw.slice(raw.indexOf(":") + 1).trim();
+  }
+
+  const suffixMatch = raw.match(LEGACY_GRADE_RE);
+  if (suffixMatch) {
+    if (!grade) grade = suffixMatch[1].toUpperCase();
+    raw = raw.slice(0, suffixMatch.index).trim();
+  }
+
+  const nk = normKey(raw);
+  const tailMatch = nk.match(/^(.*)\s(ef|q1|q2)$/i);
+  if (tailMatch) {
+    const tailGrade = tailMatch[2].toUpperCase();
+    if (!grade) grade = tailGrade;
+    if (grade === tailGrade) raw = tailMatch[1].trim();
+  }
+
+  return { raw, grade };
+}
+
+function courseAliasCandidates(value) {
+  const seen = new Set();
+  const push = (v) => {
+    const s = String(v || "").trim();
+    if (s) seen.add(s);
+  };
+  const raw = String(value || "").trim();
+  if (!raw) return [];
+  push(_norm(raw));
+  push(normKey(raw));
+  push(compactCourseToken(raw));
+  return Array.from(seen);
+}
+
 let COURSE_OPTIONS = [];
 
 let COURSE_LABEL_BY_KEY = new Map();
@@ -1023,6 +1084,20 @@ function registerCourseOptions(list) {
   COURSE_LABEL_BY_KEY = new Map();
 
   COURSE_KEY_BY_LABEL = new Map();
+
+  const registerAlias = (alias, key, grade) => {
+    const a = String(alias || "").trim();
+    if (!a) return;
+    if (grade) {
+      const ga = `${grade}::${a}`;
+      if (!COURSE_KEY_BY_LABEL.has(ga)) COURSE_KEY_BY_LABEL.set(ga, key);
+    }
+    if (!COURSE_KEY_BY_LABEL.has(a)) COURSE_KEY_BY_LABEL.set(a, key);
+  };
+
+  const registerAliasForms = (value, key, grade) => {
+    courseAliasCandidates(value).forEach((alias) => registerAlias(alias, key, grade));
+  };
 
   (Array.isArray(list) ? list : []).forEach(opt => {
 
@@ -1042,24 +1117,24 @@ function registerCourseOptions(list) {
 
     COURSE_LABEL_BY_KEY.set(key, label);
 
-    const normLabel = _norm(label);
-
-    if (normLabel) {
-
-      const gradeLabelKey = grade ? `${grade}::${normLabel}` : null;
-
-      if (gradeLabelKey && !COURSE_KEY_BY_LABEL.has(gradeLabelKey)) {
-
-        COURSE_KEY_BY_LABEL.set(gradeLabelKey, key);
-
-      }
-
-      if (!COURSE_KEY_BY_LABEL.has(normLabel)) {
-
-        COURSE_KEY_BY_LABEL.set(normLabel, key);
-
-      }
-
+    const keyBody = key.includes(":") ? key.slice(key.indexOf(":") + 1).trim() : key;
+    const keyBodyNoLevel = stripCourseLevelPrefix(keyBody);
+    const keyBodyNoLevelTokens = stripCourseLevelTokens(keyBody);
+    registerAliasForms(label, key, grade);
+    registerAliasForms(key, key, grade);
+    registerAliasForms(keyBody, key, grade);
+    if (keyBodyNoLevel && keyBodyNoLevel !== keyBody) {
+      registerAliasForms(keyBodyNoLevel, key, grade);
+    }
+    if (
+      keyBodyNoLevelTokens &&
+      keyBodyNoLevelTokens !== keyBody &&
+      keyBodyNoLevelTokens !== keyBodyNoLevel
+    ) {
+      registerAliasForms(keyBodyNoLevelTokens, key, grade);
+    }
+    if (grade) {
+      registerAliasForms(`${label} (${grade})`, key, grade);
     }
 
   });
@@ -1204,52 +1279,41 @@ function resolveCourseKey(value, gradeHint = "") {
 
   if (!value) return null;
 
-  const trimmed = value.trim();
+  const trimmed = String(value).trim();
 
   if (!trimmed) return null;
 
-  const grade = String(gradeHint || "").trim().toUpperCase();
+  const parsed = parseLegacyCourseValue(trimmed, gradeHint);
+  const grade = parsed.grade;
+  const core = parsed.raw || trimmed;
 
   if (COURSE_LABEL_BY_KEY.has(trimmed)) return trimmed;
 
   if (grade) {
 
-    const prefixed = `${grade}:${trimmed}`;
+    const prefixed = `${grade}:${core}`;
 
     if (COURSE_LABEL_BY_KEY.has(prefixed)) return prefixed;
 
-  }
+    const gradeNk = `${grade}:${normKey(core)}`;
 
-  const normLabel = _norm(trimmed);
-
-  if (normLabel) {
-
-    if (grade) {
-
-      const gradeLabelKey = `${grade}::${normLabel}`;
-
-      if (COURSE_KEY_BY_LABEL.has(gradeLabelKey)) return COURSE_KEY_BY_LABEL.get(gradeLabelKey);
-
-    }
-
-    if (COURSE_KEY_BY_LABEL.has(normLabel)) return COURSE_KEY_BY_LABEL.get(normLabel);
+    if (COURSE_LABEL_BY_KEY.has(gradeNk)) return gradeNk;
 
   }
 
-  const nk = normKey(trimmed);
+  const aliases = new Set();
+  courseAliasCandidates(trimmed).forEach((a) => aliases.add(a));
+  courseAliasCandidates(core).forEach((a) => aliases.add(a));
+  if (grade) {
+    courseAliasCandidates(`${core} (${grade})`).forEach((a) => aliases.add(a));
+  }
 
-  if (nk) {
-
+  for (const alias of aliases) {
     if (grade) {
-
-      const gradeNk = `${grade}:${nk}`;
-
-      if (COURSE_LABEL_BY_KEY.has(gradeNk)) return gradeNk;
-
+      const gradeAlias = `${grade}::${alias}`;
+      if (COURSE_KEY_BY_LABEL.has(gradeAlias)) return COURSE_KEY_BY_LABEL.get(gradeAlias);
     }
-
-    if (COURSE_LABEL_BY_KEY.has(nk)) return nk;
-
+    if (COURSE_KEY_BY_LABEL.has(alias)) return COURSE_KEY_BY_LABEL.get(alias);
   }
 
   return null;
