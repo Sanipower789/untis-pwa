@@ -94,7 +94,7 @@ def map_lessons(lessons, course_map, room_map):
 
 def main():
     parser = argparse.ArgumentParser(description="Apply course/room mappings to Untis timetable data.")
-    parser.add_argument("--grade", action="append", help="Grade to fetch (e.g. EF or Q1). Default: all configured.")
+    parser.add_argument("--grade", action="append", help="Grade to fetch (e.g. EF, Q1 or Q2). Default: all configured.")
     parser.add_argument("--week-start", help="ISO date for Monday (YYYY-MM-DD). Default: current week.")
     args = parser.parse_args()
 

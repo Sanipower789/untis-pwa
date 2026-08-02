@@ -26,11 +26,33 @@ PASS   = _require("UNTIS_PASS")
 EID    = _int_env("UNTIS_ELEMENT_ID", 0)
 ETYPE  = _int_env("UNTIS_ELEMENT_TYPE", 5)  # 5=student, 1=class, ...
 
-# Optional second (Q1) login
+# Optional upper-grade logins
 USER_Q1  = os.getenv("UNTIS_USER_Q1")
 PASS_Q1  = os.getenv("UNTIS_PASS_Q1")
-EID_Q1   = _int_env("UNTIS_ELEMENT_ID_Q1", EID)
+EID_Q1   = _int_env("UNTIS_ELEMENT_ID_Q1", 0)
 ETYPE_Q1 = _int_env("UNTIS_ELEMENT_TYPE_Q1", ETYPE)
+USER_Q2  = os.getenv("UNTIS_USER_Q2")
+PASS_Q2  = os.getenv("UNTIS_PASS_Q2")
+EID_Q2   = _int_env("UNTIS_ELEMENT_ID_Q2", 0)
+ETYPE_Q2 = _int_env("UNTIS_ELEMENT_TYPE_Q2", ETYPE)
+
+def _validate_optional_credentials(
+    label: str,
+    user: str | None,
+    password: str | None,
+    element_id: int,
+) -> None:
+    if bool(user) != bool(password):
+        raise RuntimeError(
+            f"UNTIS_USER_{label} and UNTIS_PASS_{label} must either both be set or both be absent"
+        )
+    if user and element_id <= 0:
+        raise RuntimeError(
+            f"UNTIS_ELEMENT_ID_{label} must be set when {label} credentials are configured"
+        )
+
+_validate_optional_credentials("Q1", USER_Q1, PASS_Q1, EID_Q1)
+_validate_optional_credentials("Q2", USER_Q2, PASS_Q2, EID_Q2)
 
 
 class UntisClient:
@@ -364,6 +386,13 @@ if USER_Q1 and PASS_Q1:
     except Exception:
         # If Q1 creds are misconfigured, continue without blocking EF
         CLIENTS.pop("Q1", None)
+
+if USER_Q2 and PASS_Q2:
+    try:
+        CLIENTS["Q2"] = UntisClient(BASE, SCHOOL, USER_Q2, PASS_Q2, EID_Q2, ETYPE_Q2, label="Q2")
+    except Exception:
+        # If Q2 creds are misconfigured, continue without blocking EF/Q1
+        CLIENTS.pop("Q2", None)
 
 
 def available_grades() -> list[str]:

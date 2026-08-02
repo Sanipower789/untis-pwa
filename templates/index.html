@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mein Stundenplan</title>
 
-  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=36">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=38">
   <meta name="theme-color" content="#6a1b9a" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=36">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=38">
 </head>
 <body>
 
@@ -143,8 +143,9 @@
     <!-- Kurs-Auswahl -->
     <section id="course-selection" class="card" style="display:none;">
       <h2>Kurse auswählen</h2>
-      <p class="muted">Wähle deine Kurse pro Stufe (EF / Q1).</p>
+      <p class="muted">Wähle deine Kurse pro Stufe (EF / Q1 / Q2).</p>
       <div id="course-warning" class="alert" style="display:none;"></div>
+      <div id="grade-switcher" class="grade-switcher" aria-label="Stufe auswählen"></div>
       <div id="courses" class="courses courses-split"></div>
       <div class="course-actions">
         <button id="save-courses">Speichern</button>
@@ -211,10 +212,10 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='app.js') }}?v=36"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=38"></script>
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=34");
+      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=38");
     }
   </script>
 </body>

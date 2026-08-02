@@ -2,20 +2,21 @@
 from datetime import date
 from pathlib import Path
 from dotenv import load_dotenv
-from untis_client import fetch_week, available_grades
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
+load_dotenv(dotenv_path=BASE_DIR / ".env")
+
+from untis_client import fetch_week, available_grades
+
 SUBJECTS_ALL_PATH = DATA_DIR / "subjects_raw_all.txt"
 SUBJECTS_GRADE_PATH = {
     "EF": DATA_DIR / "subjects_raw_ef.txt",
     "Q1": DATA_DIR / "subjects_raw_q1.txt",
+    "Q2": DATA_DIR / "subjects_raw_q2.txt",
 }
-
-load_dotenv(dotenv_path=BASE_DIR / ".env")
-
 
 def main():
     start = date.today()

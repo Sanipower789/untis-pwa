@@ -102,7 +102,11 @@ const LS_COURSES = "myCourses";
 
 const LS_NAME    = "myName";
 
+const LS_GRADE   = "myGrade";
+
 const LS_UPDATE_BANNER = "update_banner_seen_v1";
+
+const PROFILE_GRADES = new Set(["EF", "Q1", "Q2"]);
 
 const getCourses = () => JSON.parse(localStorage.getItem(LS_COURSES) || "[]");
 
@@ -111,6 +115,25 @@ const setCourses = (arr) => {
   const unique = Array.isArray(arr) ? Array.from(new Set(arr.filter(v => typeof v === "string" && v.trim()))) : [];
 
   localStorage.setItem(LS_COURSES, JSON.stringify(unique));
+
+  scheduleProfileSync();
+
+};
+
+const getGrade = () => {
+
+  const grade = String(localStorage.getItem(LS_GRADE) || "").trim().toUpperCase();
+
+  return PROFILE_GRADES.has(grade) ? grade : "";
+
+};
+
+const setGrade = (value) => {
+
+  const grade = String(value || "").trim().toUpperCase();
+
+  if (PROFILE_GRADES.has(grade)) localStorage.setItem(LS_GRADE, grade);
+  else localStorage.removeItem(LS_GRADE);
 
   scheduleProfileSync();
 
@@ -618,9 +641,9 @@ const clearCardColor = (cardEl) => {
   });
 };
 
-/* --- Mapping dicts for timetable rendering (from /api/mappings) --- */
+/* --- Grade-scoped mapping dicts for timetable rendering --- */
 
-let COURSE_MAP = {};
+let COURSE_MAP_BY_GRADE = { EF: {}, Q1: {}, Q2: {} };
 
 let ROOM_MAP   = {};
 
@@ -638,7 +661,13 @@ async function loadMappings() {
 
   const j = await res.json();
 
-  COURSE_MAP = j.courses || {};
+  const incomingCourseMaps = j.coursesByGrade || {};
+
+  COURSE_MAP_BY_GRADE = {
+    EF: incomingCourseMaps.EF || {},
+    Q1: incomingCourseMaps.Q1 || {},
+    Q2: incomingCourseMaps.Q2 || {}
+  };
 
   ROOM_MAP   = j.rooms   || {};
 
@@ -700,7 +729,11 @@ function mapSubject(lesson) {
 
   const live = lesson.subject ?? "";
 
-  const val = lookup(COURSE_MAP, orig);
+  const grade = String(lesson?.grade || "").trim().toUpperCase();
+
+  const gradeMap = COURSE_MAP_BY_GRADE[grade] || {};
+
+  const val = lookup(gradeMap, orig);
 
   if (val !== undefined && val !== null) {
 
@@ -764,6 +797,18 @@ function lessonMatchesSelection(lesson, selectedSet) {
   return false;
 }
 
+function filterLessonsForProfile(lessons, selectedSet) {
+  const grade = getGrade();
+  if (!grade) return [];
+  return (Array.isArray(lessons) ? lessons : []).filter(lesson => {
+    const lessonGrade = String(lesson?.grade || "").trim().toUpperCase();
+    if (lessonGrade !== grade) return false;
+    return !(selectedSet instanceof Set) ||
+      selectedSet.size === 0 ||
+      lessonMatchesSelection(lesson, selectedSet);
+  });
+}
+
 
 
 /* Exams: match against selected courses using subject/name/class labels */
@@ -784,7 +829,7 @@ function examCourseKeys(exam){
   push(exam.name);
   // also try mapped labels from course mapping for better hits
   const maybeMap = (val) => {
-    const mapped = lookup(COURSE_MAP, val);
+    const mapped = lookup(COURSE_MAP_BY_GRADE[grade] || {}, val);
     if (mapped !== undefined && mapped !== null && mapped !== val) push(mapped);
   };
   maybeMap(exam.subject);
@@ -794,6 +839,10 @@ function examCourseKeys(exam){
 }
 
 function examMatchesSelection(exam, selectedSet){
+  const profileGrade = getGrade();
+  if (!profileGrade) return false;
+  const examGrade = String(exam?.grade || "").trim().toUpperCase();
+  if (examGrade && examGrade !== profileGrade) return false;
   if (!(selectedSet instanceof Set) || selectedSet.size === 0) return true;
   const keys = examCourseKeys(exam);
   if (!keys.size) return false;
@@ -992,7 +1041,7 @@ const uid = () => Math.random().toString(36).slice(2,10);
 
 
 
-/* ============ COURSE OPTIONS from course_mapping.txt ONLY ============ */
+/* ============ Grade-scoped course options ============ */
 
 const gradeFromKey = (key) => {
 
@@ -1007,6 +1056,8 @@ const gradeFromKey = (key) => {
   return s.slice(0, i).trim().toUpperCase();
 
 };
+
+const COURSE_GRADE_ORDER = Array.from(PROFILE_GRADES);
 
 const LEGACY_GRADE_RE = /\((EF|Q1|Q2)\)\s*$/i;
 
@@ -1075,6 +1126,8 @@ let COURSE_LABEL_BY_KEY = new Map();
 
 let COURSE_KEY_BY_LABEL = new Map(); // keyed by _norm(label) and grade-specific label
 
+let COURSE_KEYS_BY_ALIAS = new Map();
+
 
 
 function registerCourseOptions(list) {
@@ -1085,6 +1138,8 @@ function registerCourseOptions(list) {
 
   COURSE_KEY_BY_LABEL = new Map();
 
+  COURSE_KEYS_BY_ALIAS = new Map();
+
   const registerAlias = (alias, key, grade) => {
     const a = String(alias || "").trim();
     if (!a) return;
@@ -1092,7 +1147,8 @@ function registerCourseOptions(list) {
       const ga = `${grade}::${a}`;
       if (!COURSE_KEY_BY_LABEL.has(ga)) COURSE_KEY_BY_LABEL.set(ga, key);
     }
-    if (!COURSE_KEY_BY_LABEL.has(a)) COURSE_KEY_BY_LABEL.set(a, key);
+    if (!COURSE_KEYS_BY_ALIAS.has(a)) COURSE_KEYS_BY_ALIAS.set(a, new Set());
+    COURSE_KEYS_BY_ALIAS.get(a).add(key);
   };
 
   const registerAliasForms = (value, key, grade) => {
@@ -1138,70 +1194,6 @@ function registerCourseOptions(list) {
     }
 
   });
-
-}
-
-
-
-async function loadCourseOptionsFromTxt() {
-
-  const tryUrls = ["/static/course_mapping.txt", "/course_mapping.txt"];
-
-  const byKey = new Map();
-
-  for (const url of tryUrls) {
-
-    try {
-
-      const res = await fetch(`${url}?v=${Date.now()}`, { cache: "no-store" });
-
-      if (!res.ok) continue;
-
-      const txt = await res.text();
-
-      txt.split(/\r?\n/).forEach(line => {
-
-        const s = line.trim();
-
-        if (!s || s.startsWith("#")) return;
-
-        const i = s.indexOf("=");
-
-        if (i === -1) return;
-
-        const lhs = s.slice(0, i).trim();
-
-        const rhs = s.slice(i + 1).trim();
-
-        if (!lhs) return;
-
-        const key = normKey(lhs);
-
-        if (!key) return;
-
-        const label = rhs || lhs;
-
-        byKey.set(key, label);
-
-      });
-
-      break;
-
-    } catch (_) { /* try next */ }
-
-  }
-
-  return Array.from(byKey.entries())
-
-    .map(([key, label]) => {
-
-      const grade = gradeFromKey(key);
-
-      return { key, label, grade };
-
-    })
-
-    .sort((a, b) => a.label.localeCompare(b.label, 'de'));
 
 }
 
@@ -1265,10 +1257,8 @@ async function loadCourseOptions() {
 
 
 
-  const fallback = await loadCourseOptionsFromTxt();
-
-  registerCourseOptions(fallback);
-
+  // An unscoped text mapping cannot safely distinguish EF, Q1 and Q2.
+  registerCourseOptions([]);
   return COURSE_OPTIONS;
 
 }
@@ -1313,7 +1303,10 @@ function resolveCourseKey(value, gradeHint = "") {
       const gradeAlias = `${grade}::${alias}`;
       if (COURSE_KEY_BY_LABEL.has(gradeAlias)) return COURSE_KEY_BY_LABEL.get(gradeAlias);
     }
-    if (COURSE_KEY_BY_LABEL.has(alias)) return COURSE_KEY_BY_LABEL.get(alias);
+    const matchingKeys = COURSE_KEYS_BY_ALIAS.get(alias);
+    if (matchingKeys && matchingKeys.size === 1) {
+      return matchingKeys.values().next().value;
+    }
   }
 
   return null;
@@ -1322,21 +1315,33 @@ function resolveCourseKey(value, gradeHint = "") {
 
 
 
-function normaliseCourseSelection(values) {
+function normaliseCourseSelection(values, gradeHint = getGrade()) {
 
   const out = [];
 
   const seen = new Set();
 
+  const unresolved = [];
+
   let changed = false;
+
+  const preferredGrade = PROFILE_GRADES.has(String(gradeHint || "").trim().toUpperCase())
+    ? String(gradeHint).trim().toUpperCase()
+    : "";
 
   values.forEach(v => {
 
     const raw = typeof v === "string" ? v : "";
 
-    const key = resolveCourseKey(raw, gradeFromKey(raw));
+    const explicitGrade = gradeFromKey(raw);
 
-    if (!key) { changed = true; return; }
+    const key = resolveCourseKey(raw, explicitGrade || preferredGrade);
+
+    if (!key) {
+      if (!explicitGrade && !preferredGrade && raw.trim()) unresolved.push(raw.trim());
+      else changed = true;
+      return;
+    }
 
     if (seen.has(key)) {
 
@@ -1354,7 +1359,7 @@ function normaliseCourseSelection(values) {
 
   });
 
-  return { keys: out, changed };
+  return { keys: out, changed, unresolved };
 
 }
 
@@ -2175,6 +2180,8 @@ function showView(view) {
 
       name: getName(),
 
+      grade: getGrade(),
+
       courses: getCourses(),
 
       klausuren: KlausurenStore.load(),
@@ -2300,6 +2307,7 @@ function showView(view) {
         ColorPrefs.save(profile.colors, { silent: true });
       }
       if (typeof profile.name === "string") setName(profile.name);
+      if (typeof profile.grade === "string") setGrade(profile.grade);
       if (Array.isArray(profile.courses)) setCourses(profile.courses);
       if (Array.isArray(profile.klausuren)) KlausurenStore.save(profile.klausuren);
     });
@@ -2322,7 +2330,11 @@ function showView(view) {
 
     if (window.__latestLessons) {
 
-      buildGrid(window.__latestLessons, window.__currentWeekStart, window.__selectedCourseKeys, window.__timeColumnWidth);
+      const filteredLessons = filterLessonsForProfile(
+        window.__latestLessons,
+        window.__selectedCourseKeys
+      );
+      buildGrid(filteredLessons, window.__currentWeekStart, window.__selectedCourseKeys, window.__timeColumnWidth);
 
     }
 
@@ -2792,6 +2804,8 @@ async function buildCourseSelection(allLessons) {
 
   const warnEl   = document.getElementById("course-warning");
 
+  const gradeSwitcher = document.getElementById("grade-switcher");
+
   const nameInput= document.getElementById("profile-name");
 
   if (!cs || !box || !saveBtn || !editBtn) return;
@@ -2813,6 +2827,8 @@ async function buildCourseSelection(allLessons) {
   if (changed) setCourses(resolved);
 
   const saved = new Set(resolved);
+
+  let activeGrade = getGrade();
 
 
 
@@ -2858,7 +2874,7 @@ async function buildCourseSelection(allLessons) {
 
   const gradeOrder = Array.from(grouped.keys()).sort((a, b) => {
 
-    const pref = ["EF", "Q1", "Q2"];
+    const pref = COURSE_GRADE_ORDER;
 
     const ia = pref.indexOf(a);
 
@@ -2886,6 +2902,8 @@ async function buildCourseSelection(allLessons) {
 
   box.innerHTML = "";
 
+  if (gradeSwitcher) gradeSwitcher.innerHTML = "";
+
   if (!gradeOrder.length) {
 
     box.innerHTML = '<div class="muted">Keine Kursoptionen geladen.</div>';
@@ -2894,27 +2912,32 @@ async function buildCourseSelection(allLessons) {
 
     const panels = [];
 
+    const selectableGrades = gradeOrder.filter(Boolean);
+
+    const inputGrade = (inp) => {
+      const val = String(inp?.value || "");
+      return gradeFromKey(val) || String(inp?.dataset?.grade || inp?.closest?.("[data-grade]")?.dataset?.grade || "").trim().toUpperCase();
+    };
+
+    const currentSelectedGrades = () => {
+      const grades = [...box.querySelectorAll("input[type=checkbox]:checked")]
+        .map(inputGrade)
+        .filter(Boolean);
+      return Array.from(new Set(grades));
+    };
+
+    const initialSavedGrades = Array.from(new Set(resolved.map(gradeFromKey).filter(Boolean)));
+    activeGrade = selectableGrades.includes(activeGrade)
+      ? activeGrade
+      : (initialSavedGrades.length === 1 ? initialSavedGrades[0] : "");
+    if (activeGrade && getGrade() !== activeGrade) setGrade(activeGrade);
+    let setActiveGrade = () => {};
+
     const updateSelectionWarning = () => {
 
       if (!warnEl) return;
 
-      const selectedInputs = [...box.querySelectorAll("input[type=checkbox]:checked")];
-
-      const byGrade = new Map();
-
-      selectedInputs.forEach(inp => {
-
-        const val = String(inp.value || "");
-
-        const grade = gradeFromKey(val) || String(inp.dataset.grade || inp.closest("[data-grade]")?.dataset.grade || "").trim().toUpperCase();
-
-        if (!grade) return;
-
-        byGrade.set(grade, (byGrade.get(grade) || 0) + 1);
-
-      });
-
-      const grades = Array.from(byGrade.keys());
+      const grades = currentSelectedGrades();
 
       if (grades.length <= 1) {
 
@@ -2928,12 +2951,14 @@ async function buildCourseSelection(allLessons) {
 
       warnEl.style.display = "block";
 
+      const gradeLabels = grades.join(", ");
+      const buttons = grades
+        .map(g => `<button type="button" data-keep="${escapeHtml(g)}">Nur ${escapeHtml(g)} behalten</button>`)
+        .join("");
+
       warnEl.innerHTML = `
-        <strong>Hinweis:</strong> EF und Q1 gleichzeitig ausgewählt. Bitte nur eine Stufe wählen, sonst riskierst du doppelte Einträge.<br>
-        <div class="warning-actions">
-          <button type="button" data-keep="EF">Nur EF behalten</button>
-          <button type="button" data-keep="Q1">Nur Q1 behalten</button>
-        </div>
+        <strong>Hinweis:</strong> ${escapeHtml(gradeLabels)} gleichzeitig ausgewählt. Bitte nur eine Stufe wählen, sonst riskierst du doppelte Einträge.<br>
+        <div class="warning-actions">${buttons}</div>
       `;
 
       warnEl.querySelectorAll("button[data-keep]").forEach(btn => {
@@ -2942,19 +2967,7 @@ async function buildCourseSelection(allLessons) {
 
           const keep = String(btn.dataset.keep || "").trim().toUpperCase();
 
-          [...box.querySelectorAll("input[type=checkbox]")].forEach(inp => {
-
-            const val = String(inp.value || "");
-
-            const g = gradeFromKey(val) || String(inp.dataset.grade || inp.closest("[data-grade]")?.dataset.grade || "").trim().toUpperCase();
-
-            if (g && keep && g !== keep) inp.checked = false;
-
-          });
-
-          panels.forEach(p => p.updateCount());
-
-          updateSelectionWarning();
+          setActiveGrade(keep, true);
 
         };
 
@@ -2974,6 +2987,60 @@ async function buildCourseSelection(allLessons) {
 
       });
 
+    };
+
+    const renderGradeSwitcher = () => {
+      if (!gradeSwitcher) return;
+      gradeSwitcher.innerHTML = "";
+      selectableGrades.forEach(grade => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = grade;
+        btn.className = activeGrade === grade ? "active" : "";
+        btn.setAttribute("aria-pressed", activeGrade === grade ? "true" : "false");
+        btn.onclick = () => setActiveGrade(grade, true);
+        gradeSwitcher.appendChild(btn);
+      });
+    };
+
+    setActiveGrade = (grade, clearOtherGrades = false) => {
+      const previousActiveGrade = activeGrade;
+      activeGrade = String(grade || "").trim().toUpperCase();
+      const selectedBodiesToTransfer = [];
+
+      if (clearOtherGrades && previousActiveGrade && previousActiveGrade !== activeGrade) {
+        [...box.querySelectorAll("input[type=checkbox]:checked")].forEach(inp => {
+          if (inputGrade(inp) !== previousActiveGrade) return;
+          const value = String(inp.value || "");
+          const sep = value.indexOf(":");
+          if (sep !== -1) selectedBodiesToTransfer.push(value.slice(sep + 1));
+        });
+      }
+
+      if (clearOtherGrades && activeGrade) {
+        const transferKeys = new Set(selectedBodiesToTransfer.map(body => `${activeGrade}:${body}`));
+        if (!previousActiveGrade) {
+          const legacyKeys = normaliseCourseSelection(rawSaved, activeGrade).keys;
+          legacyKeys.forEach(key => transferKeys.add(key));
+        }
+        [...box.querySelectorAll("input[type=checkbox]")].forEach(inp => {
+          const g = inputGrade(inp);
+          if (g && g !== activeGrade) inp.checked = false;
+          if (transferKeys.has(String(inp.value || ""))) inp.checked = true;
+        });
+      }
+
+      panels.forEach(p => {
+        const visible = !activeGrade || !p.grade || p.grade === activeGrade;
+        p.wrapper.style.display = visible ? "" : "none";
+        if (!visible) p.wrapper.classList.remove("open");
+        p.updateCount();
+      });
+
+      const target = activeGrade ? panels.find(p => p.grade === activeGrade) : null;
+      if (target) openPanel(target);
+      renderGradeSwitcher();
+      updateSelectionWarning();
     };
 
     let defaultOpen = null;
@@ -3064,7 +3131,7 @@ async function buildCourseSelection(allLessons) {
 
       box.appendChild(wrapper);
 
-      const panel = { wrapper, body, list, countLabel };
+      const panel = { wrapper, body, list, countLabel, grade };
 
       panel.updateCount = () => {
 
@@ -3100,9 +3167,13 @@ async function buildCourseSelection(allLessons) {
 
     });
 
-    updateSelectionWarning();
-
-    openPanel(defaultOpen);
+    if (activeGrade) {
+      setActiveGrade(activeGrade, false);
+    } else {
+      renderGradeSwitcher();
+      updateSelectionWarning();
+      openPanel(defaultOpen);
+    }
 
   }
 
@@ -3110,12 +3181,25 @@ async function buildCourseSelection(allLessons) {
 
   saveBtn.onclick = () => {
 
-    const selected = [...box.querySelectorAll("input[type=checkbox]:checked")]
+    const selectedInputs = [...box.querySelectorAll("input[type=checkbox]:checked")];
 
+    const selectedGrades = Array.from(new Set(
+      selectedInputs.map(i => gradeFromKey(i.value)).filter(Boolean)
+    ));
+
+    if (selectedGrades.length > 1) {
+      if (warnEl) warnEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      return;
+    }
+
+    const selectedGrade = activeGrade || selectedGrades[0] || "";
+
+    const selected = selectedInputs
+      .filter(i => !selectedGrade || gradeFromKey(i.value) === selectedGrade)
       .map(i => i.value)
-
       .filter(Boolean);
 
+    setGrade(selectedGrade);
     setCourses(selected);
 
     const nameValue = nameInput ? nameInput.value.trim() : storedName;
@@ -3142,7 +3226,7 @@ async function buildCourseSelection(allLessons) {
 
 
 
-  if (getCourses().length === 0) {
+  if (getCourses().length === 0 || !activeGrade) {
 
     cs.style.display = "block";
 
@@ -3890,11 +3974,7 @@ async function loadTimetable(force = false, weekStart = null) {
 
 
 
-    if (selectedSet.size > 0) {
-
-      lessons = lessons.filter((l) => lessonMatchesSelection(l, selectedSet));
-
-    }
+    lessons = filterLessonsForProfile(lessons, selectedSet);
 
 
 

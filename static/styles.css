@@ -73,6 +73,10 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 
 /* ===== Course list ===== */
 .courses{columns:2;column-gap:18px}
+.grade-switcher{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;}
+.grade-switcher:empty{display:none;}
+.grade-switcher button{background:#20232b;border:1px solid #333947;color:#dce0e8;border-radius:8px;padding:7px 12px;}
+.grade-switcher button.active{background:var(--brand);border-color:var(--brand);color:#fff;}
 .course-actions{display:flex;justify-content:flex-end;margin:12px 0 0;}
 .course-actions button{padding:8px 12px;font-weight:700;}
 .courses-split{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;columns:auto}

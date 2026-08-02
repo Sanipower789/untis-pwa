@@ -5,7 +5,14 @@ Small Flask PWA for WebUntis timetables with optional admin mapping tools and Re
 ## Required environment
 - `SECRET_KEY` – long random string (e.g., 64 hex chars). Needed so Flask signed cookies stay valid across deploys.
 - `ADMIN_TOKEN` – password for `/admin/login`.
-- `UNTIS_BASE`, `UNTIS_SCHOOL`, `UNTIS_USER`, `UNTIS_PASS` (and optional `UNTIS_USER_Q1`, `UNTIS_PASS_Q1`, `UNTIS_ELEMENT_*`) for WebUntis access.
+- Shared Untis settings: `UNTIS_BASE`, `UNTIS_SCHOOL`.
+- EF: `UNTIS_USER`, `UNTIS_PASS`, `UNTIS_ELEMENT_ID`, and optional `UNTIS_ELEMENT_TYPE`.
+- Q1: `UNTIS_USER_Q1`, `UNTIS_PASS_Q1`, `UNTIS_ELEMENT_ID_Q1`, and optional `UNTIS_ELEMENT_TYPE_Q1`.
+- Q2: `UNTIS_USER_Q2`, `UNTIS_PASS_Q2`, `UNTIS_ELEMENT_ID_Q2`, and optional `UNTIS_ELEMENT_TYPE_Q2`.
+
+Both username and password must be configured together for Q1 and Q2, and each enabled grade requires its own element ID. The optional element type inherits from EF when omitted.
+
+At the yearly rollover, do not leave the same Untis account assigned to two grades. Move the previous Q1 account to the Q2 variables, move the previous EF account to the Q1 variables, and put the new EF account in the un-suffixed EF variables.
 
 ## Session settings
 - Sessions are stateless signed cookies; no server-side session store.

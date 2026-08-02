@@ -250,7 +250,7 @@
 
 
 
-        <label class="pill"><input type="checkbox" id="only-unmapped-sub-ef" checked> nur offene</label>
+        <label class="pill"><input type="checkbox" id="only-unmapped-sub-ef"> nur offene</label>
 
 
 
@@ -306,7 +306,7 @@
 
 
 
-        <label class="pill"><input type="checkbox" id="only-unmapped-sub-q1" checked> nur offene</label>
+        <label class="pill"><input type="checkbox" id="only-unmapped-sub-q1"> nur offene</label>
 
 
 
@@ -330,11 +330,112 @@
 
 
 
-      <div class="foot"><button id="save-sub-q1">Speichern</button></div>
-
-
-
-    </div>
+      <div class="foot"><button id="save-sub-q1">Speichern</button></div>
+    </div>
+
+
+
+
+
+
+
+    <div class="card" id="subjects-q2">
+
+
+
+
+
+
+
+      <h2>Fächer Q2</h2>
+
+
+
+
+
+
+
+      <div class="bar">
+
+
+
+
+
+
+
+        <span class="pill" id="sub-count-q2"></span>
+
+
+
+
+
+
+
+        <span class="pill" id="sub-unmapped-q2"></span>
+
+
+
+
+
+
+
+        <label class="pill"><input type="checkbox" id="only-unmapped-sub-q2"> nur offene</label>
+
+
+
+
+
+
+
+      </div>
+
+
+
+
+
+
+
+      <table id="sub-table-q2">
+
+
+
+
+
+
+
+        <thead><tr><th style="width:45%">Normalisierter Schlüssel</th><th>Anzeige-Name</th></tr></thead>
+
+
+
+
+
+
+
+        <tbody></tbody>
+
+
+
+
+
+
+
+      </table>
+
+
+
+
+
+
+
+      <div class="foot"><button id="save-sub-q2">Speichern</button></div>
+
+
+
+
+
+
+
+    </div>
 
 
 
@@ -762,7 +863,7 @@
 
 
 
-          <input type="text" id="exam-classes" placeholder="EF, Q1">
+          <input type="text" id="exam-classes" placeholder="EF, Q1, Q2">
 
 
 
@@ -950,19 +1051,19 @@ const state = {
 
 
 
-  courses: {}, rooms: {},
+  rooms: {},
 
 
 
-  courses_ef: {}, courses_q1: {},
+  courses_ef: {}, courses_q1: {}, courses_q2: {},
 
 
 
-  subjects_grouped_ef: {}, subjects_grouped_q1: {}, rooms_grouped: {},
+  subjects_grouped_ef: {}, subjects_grouped_q1: {}, subjects_grouped_q2: {}, rooms_grouped: {},
 
 
 
-  unmapped_subjects_ef: [], unmapped_subjects_q1: [], unmapped_rooms: [],
+  unmapped_subjects_ef: [], unmapped_subjects_q1: [], unmapped_subjects_q2: [], unmapped_rooms: [],
 
 
 
@@ -1134,15 +1235,19 @@ async function loadState(){
 
 
 
-  state.courses = j.courses || {};
+  state.courses_ef = j.courses_ef || {};
 
 
 
-  state.courses_ef = j.courses_ef || {};
-
-
-
-  state.courses_q1 = j.courses_q1 || {};
+  state.courses_q1 = j.courses_q1 || {};
+
+
+
+
+
+
+
+  state.courses_q2 = j.courses_q2 || {};
 
 
 
@@ -1154,7 +1259,15 @@ async function loadState(){
 
 
 
-  state.subjects_grouped_q1 = j.subjects_grouped_q1 || {};
+  state.subjects_grouped_q1 = j.subjects_grouped_q1 || {};
+
+
+
+
+
+
+
+  state.subjects_grouped_q2 = j.subjects_grouped_q2 || {};
 
 
 
@@ -1166,7 +1279,15 @@ async function loadState(){
 
 
 
-  state.unmapped_subjects_q1 = j.unmapped_subjects_q1 || [];
+  state.unmapped_subjects_q1 = j.unmapped_subjects_q1 || [];
+
+
+
+
+
+
+
+  state.unmapped_subjects_q2 = j.unmapped_subjects_q2 || [];
 
 
 
@@ -1202,7 +1323,15 @@ async function loadState(){
 
 
 
-  setText("sub-count-q1", `${Object.keys(state.subjects_grouped_q1).length} Schlüssel`);
+  setText("sub-count-q1", `${Object.keys(state.subjects_grouped_q1).length} Schlüssel`);
+
+
+
+
+
+
+
+  setText("sub-count-q2", `${Object.keys(state.subjects_grouped_q2).length} Schlüssel`);
 
 
 
@@ -1214,7 +1343,15 @@ async function loadState(){
 
 
 
-  setText("sub-unmapped-q1", `${state.unmapped_subjects_q1.length} offen`);
+  setText("sub-unmapped-q1", `${state.unmapped_subjects_q1.length} offen`);
+
+
+
+
+
+
+
+  setText("sub-unmapped-q2", `${state.unmapped_subjects_q2.length} offen`);
 
 
 
@@ -1234,7 +1371,7 @@ async function loadState(){
 
 
 
-    backupInfo.textContent = `Aktuelle Mappings: EF ${Object.keys(state.courses_ef).length}, Q1 ${Object.keys(state.courses_q1).length}`;
+    backupInfo.textContent = `Aktuelle Mappings: EF ${Object.keys(state.courses_ef).length}, Q1 ${Object.keys(state.courses_q1).length}, Q2 ${Object.keys(state.courses_q2).length}`;
 
 
 
@@ -1294,11 +1431,11 @@ function renderTables(){
 
 
 
-    const grouped = grade === "ef" ? state.subjects_grouped_ef : state.subjects_grouped_q1;
+    const grouped = state[`subjects_grouped_${grade}`] || {};
 
 
 
-    const mapped = grade === "ef" ? state.courses_ef : state.courses_q1;
+    const mapped = state[`courses_${grade}`] || {};
 
 
 
@@ -1338,7 +1475,15 @@ function renderTables(){
 
 
 
-  renderGrade("q1");
+  renderGrade("q1");
+
+
+
+
+
+
+
+  renderGrade("q2");
 
 
 
@@ -1738,7 +1883,20 @@ async function save(kind){
 
 
 
-  const tableId = kind === "courses_ef" ? "sub-table-ef" : kind === "courses_q1" ? "sub-table-q1" : "room-table";
+  const tableByKind = {
+    courses_ef: "sub-table-ef",
+    courses_q1: "sub-table-q1",
+    courses_q2: "sub-table-q2",
+    rooms: "room-table"
+  };
+
+
+
+
+
+
+
+  const tableId = tableByKind[kind] || "room-table";
 
 
 
@@ -1798,7 +1956,15 @@ const btnSaveEf = document.getElementById("save-sub-ef");
 
 
 
-const btnSaveQ1 = document.getElementById("save-sub-q1");
+const btnSaveQ1 = document.getElementById("save-sub-q1");
+
+
+
+
+
+
+
+const btnSaveQ2 = document.getElementById("save-sub-q2");
 
 
 
@@ -1810,7 +1976,15 @@ if (btnSaveEf) btnSaveEf.onclick = () => save("courses_ef");
 
 
 
-if (btnSaveQ1) btnSaveQ1.onclick = () => save("courses_q1");
+if (btnSaveQ1) btnSaveQ1.onclick = () => save("courses_q1");
+
+
+
+
+
+
+
+if (btnSaveQ2) btnSaveQ2.onclick = () => save("courses_q2");
 
 
 
@@ -1822,7 +1996,15 @@ const chkOpenEf = document.getElementById("only-unmapped-sub-ef");
 
 
 
-const chkOpenQ1 = document.getElementById("only-unmapped-sub-q1");
+const chkOpenQ1 = document.getElementById("only-unmapped-sub-q1");
+
+
+
+
+
+
+
+const chkOpenQ2 = document.getElementById("only-unmapped-sub-q2");
 
 
 
@@ -1834,7 +2016,15 @@ if (chkOpenEf) chkOpenEf.onchange = renderTables;
 
 
 
-if (chkOpenQ1) chkOpenQ1.onchange = renderTables;
+if (chkOpenQ1) chkOpenQ1.onchange = renderTables;
+
+
+
+
+
+
+
+if (chkOpenQ2) chkOpenQ2.onchange = renderTables;
 
 
 
