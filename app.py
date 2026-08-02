@@ -584,7 +584,9 @@ def _bootstrap_data_file(preferred: str, legacy: str | None = None) -> None:
             pass
 
 for _p in COURSE_MAP_PATHS.values():
-    _bootstrap_data_file(_p, LEGACY_COURSE_MAP_PATH)
+    # A legacy map has no grade ownership, so copying it into every grade would
+    # make all EF/Q1/Q2 subjects appear interchangeable.
+    _bootstrap_data_file(_p)
 _bootstrap_data_file(ROOM_MAP_PATH, LEGACY_ROOM_MAP_PATH)
 
 def _load_raw_subjects_for_grade(grade: str) -> list[str]:
@@ -698,13 +700,6 @@ def _write_mapping_txt(path: str, mapping: dict[str, str]) -> None:
 # course mapping helpers (per-grade files, merged views)
 def _course_map_path_for_grade(grade: str) -> str | None:
     return COURSE_MAP_PATHS.get((grade or "").upper())
-
-def _course_raw_map_for_grade(grade: str) -> dict[str, str]:
-    path = _course_map_path_for_grade(grade)
-    if path:
-        return load_mapping_txt(path)
-    # Unknown grade: do not cross-mix
-    return {}
 
 def _course_map_normalized_for_grade(grade: str) -> dict[str, str]:
     path = _course_map_path_for_grade(grade)
@@ -832,8 +827,6 @@ def _subject_groups_for_grade(grade: str) -> dict[str, list[str]]:
         *SEEN_SUBJECTS_RAW_BY_GRADE.get(grade, []),
     ]
     grouped = _group_variants(raw_values)
-    for key in _course_map_normalized_for_grade(grade):
-        grouped.setdefault(key, [key])
     return dict(sorted(grouped.items()))
 
 # ---------- Timetable cache/throttle ----------
@@ -948,7 +941,7 @@ def index():
 @app.route("/sw.js")
 def service_worker():
     # Serve the PWA service worker from the root path
-    return send_from_directory(app.static_folder, "sw.js", cache_timeout=0)
+    return send_from_directory(app.static_folder, "sw.js", max_age=0)
 
 @app.route("/api/mappings")
 def api_mappings():
@@ -969,28 +962,19 @@ def api_courses():
 
     Key: grade-prefixed normalised LHS (GRADE:norm_key). Label: RHS if present, else original LHS.
     """
-    def _label_for(raw_left: str, raw_map: dict[str, str]) -> tuple[str, str] | None:
-        left = (raw_left or "").strip()
-        label = (raw_map.get(raw_left, "") or "").strip() or left
-        nk = norm_key(left)
-        if not nk:
-            return None
-        return nk, label
-
     def _options_for_grade(grade: str) -> dict[str, str]:
         """Build per-grade options so EF/Q1/Q2 stay separated."""
         opts: dict[str, str] = {}
-        raw_map = _course_raw_map_for_grade(grade)
-        for left in raw_map.keys():
-            pair = _label_for(left, raw_map)
-            if pair:
-                nk, label = pair
-                opts[nk] = label
-        for raw_subj in _load_raw_subjects_for_grade(grade):
-            pair = _label_for(raw_subj, raw_map)
-            if pair:
-                nk, label = pair
-                opts.setdefault(nk, label)
+        mapping = _course_map_normalized_for_grade(grade)
+        raw_subjects = [
+            *_load_raw_subjects_for_grade(grade),
+            *SEEN_SUBJECTS_RAW_BY_GRADE.get(grade, []),
+        ]
+        for raw_subject in raw_subjects:
+            left = str(raw_subject or "").strip()
+            key = norm_key(left)
+            if key:
+                opts.setdefault(key, (mapping.get(key) or "").strip() or left)
         return opts
 
     grades = available_grades() or ["EF"]
@@ -1623,7 +1607,12 @@ def _apply_backup_payload(payload: dict) -> None:
                     grade_map[nk] = (v or "").strip()
             courses_by_grade[grade] = grade_map
     if courses_map and not courses_by_grade:
-        raise ValueError("backup_course_mappings_are_not_grade_specific")
+        # Legacy backups may contain one merged subject map. Restore their
+        # database content, but never copy that ambiguous map into any grade.
+        app.logger.warning(
+            "legacy backup contains only an unscoped subject map; "
+            "restoring database content and leaving grade mappings unchanged"
+        )
 
     rooms_map = {}
     rooms = mappings_section.get("rooms")
@@ -1709,39 +1698,106 @@ def _apply_backup_payload(payload: dict) -> None:
     _last_seen_flush = time.time()
 
 
-def _maybe_send_backup(trigger: str = "manual", payload: dict | None = None) -> None:
+def _backup_user_count(payload: dict) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    database = payload.get("database")
+    if not isinstance(database, dict):
+        return None
+    users = database.get("users")
+    return len(users) if isinstance(users, list) else None
+
+
+def _database_user_count() -> int:
+    return int(get_db().execute("SELECT COUNT(*) FROM users").fetchone()[0])
+
+
+_BACKUP_SHRINK_TRIGGERS = {"admin_user_delete", "admin_restore"}
+
+
+def _maybe_send_backup(trigger: str = "manual", payload: dict | None = None) -> bool:
     """
     Push a fresh backup to a webhook if configured (Render free tier loses disk).
     The call is best-effort and time-limited so API responses are not blocked.
     """
     if not BACKUP_WEBHOOK_URL:
-        return
+        return False
     try:
         data = payload or _build_backup_payload()
+        local_user_count = _backup_user_count(data)
+        if local_user_count is None:
+            app.logger.warning("backup skipped (%s): invalid local payload", trigger)
+            return False
+
+        allow_shrink = trigger in _BACKUP_SHRINK_TRIGGERS
+        if not allow_shrink and local_user_count == 0:
+            app.logger.warning("backup skipped (%s): local user database is empty", trigger)
+            return False
+
+        if not allow_shrink and AUTO_RESTORE_URL:
+            try:
+                remote = requests.get(AUTO_RESTORE_URL, timeout=20)
+                remote.raise_for_status()
+                remote_user_count = _backup_user_count(remote.json())
+            except Exception as exc:
+                app.logger.warning(
+                    "backup skipped (%s): remote safety check failed: %s",
+                    trigger,
+                    exc,
+                )
+                return False
+            if remote_user_count is not None and remote_user_count > local_user_count:
+                app.logger.error(
+                    "backup skipped (%s): refusing to replace %s remote users "
+                    "with %s local users",
+                    trigger,
+                    remote_user_count,
+                    local_user_count,
+                )
+                return False
+
         headers = {"User-Agent": "untis-pwa/backup"}
-        requests.post(BACKUP_WEBHOOK_URL, json=data, timeout=8, headers=headers)
+        response = requests.post(
+            BACKUP_WEBHOOK_URL,
+            json=data,
+            timeout=8,
+            headers=headers,
+        )
+        response.raise_for_status()
+        return True
     except Exception as exc:
         app.logger.warning("backup webhook failed (%s): %s", trigger, exc)
+        return False
 
 
-def _maybe_auto_restore() -> None:
+def _maybe_auto_restore() -> bool:
     """If AUTO_RESTORE_URL is set and DB is empty, pull a backup JSON and restore it."""
     if not AUTO_RESTORE_URL:
-        return
+        return _database_user_count() > 0
     try:
-        cur = get_db().execute("SELECT COUNT(*) FROM users")
-        if cur.fetchone()[0] > 0 and not AUTO_RESTORE_FORCE:
-            return
+        if _database_user_count() > 0 and not AUTO_RESTORE_FORCE:
+            return True
     except Exception as exc:
         app.logger.warning("auto-restore precheck failed: %s", exc)
-        return
+        return False
     try:
         resp = requests.get(AUTO_RESTORE_URL, timeout=20)
         resp.raise_for_status()
-        _apply_backup_payload(resp.json())
+        payload = resp.json()
+        expected_users = _backup_user_count(payload)
+        if expected_users is None:
+            raise ValueError("backup_users_invalid")
+        _apply_backup_payload(payload)
+        restored_users = _database_user_count()
+        if restored_users != expected_users:
+            raise RuntimeError(
+                f"restored {restored_users} users, expected {expected_users}"
+            )
         app.logger.info("auto-restore from AUTO_RESTORE_URL succeeded")
+        return True
     except Exception as exc:
         app.logger.warning("auto-restore failed: %s", exc)
+        return False
 
 
 _auto_backup_started = False
@@ -1779,9 +1835,14 @@ def _start_auto_backup_worker():
 # Attempt a one-time auto-restore on cold start if the DB is empty, then start periodic backups
 try:
     with app.app_context():
-        _maybe_auto_restore()
-        _maybe_send_backup("startup")
-        _start_auto_backup_worker()
+        if _maybe_auto_restore():
+            _maybe_send_backup("startup")
+            _start_auto_backup_worker()
+        else:
+            app.logger.error(
+                "startup backup disabled because the user database could not "
+                "be restored safely"
+            )
 except Exception:
     app.logger.exception("auto-restore hook failed")
 

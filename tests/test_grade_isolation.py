@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 
 TEST_DB_PATH = Path(tempfile.gettempdir()) / "untis_pwa_grade_isolation_tests.db"
@@ -96,6 +97,67 @@ class GradeIsolationTests(unittest.TestCase):
         self.assertEqual(options["Q1:same raw key"], "Q1 Name")
         self.assertEqual(options["Q2:same raw key"], "Q2 Name")
 
+    def test_course_options_do_not_leak_mapping_keys_between_grades(self):
+        for grade, path in self.paths.items():
+            Path(path).write_text(
+                "ef only=EF course\nq1 only=Q1 course\nq2 only=Q2 course\n",
+                encoding="utf-8",
+            )
+        app_module.SEEN_SUBJECTS_RAW_BY_GRADE = {
+            "EF": ["EF ONLY"],
+            "Q1": ["Q1 ONLY"],
+            "Q2": ["Q2 ONLY"],
+        }
+
+        with patch.object(app_module, "_load_raw_subjects_for_grade", return_value=[]):
+            payload = self.client.get("/api/courses").get_json()
+
+        options_by_grade = {
+            grade: {
+                item["key"]
+                for item in payload["courses"]
+                if item["grade"] == grade
+            }
+            for grade in app_module.SUPPORTED_GRADES
+        }
+        self.assertEqual(options_by_grade["EF"], {"EF:ef only"})
+        self.assertEqual(options_by_grade["Q1"], {"Q1:q1 only"})
+        self.assertEqual(options_by_grade["Q2"], {"Q2:q2 only"})
+
+    def test_saved_mapping_only_course_does_not_redefine_grade_catalog(self):
+        Path(self.paths["Q2"]).write_text(
+            "same raw key=Q2 Name\nsaved only=Saved Q2\n",
+            encoding="utf-8",
+        )
+        app_module.SEEN_SUBJECTS_RAW_BY_GRADE = {
+            grade: [] for grade in app_module.SUPPORTED_GRADES
+        }
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            db.execute("DELETE FROM users WHERE username = ?", ("saved-q2-test",))
+            db.execute(
+                "INSERT INTO users (username, password_hash, profile_json) VALUES (?, ?, ?)",
+                (
+                    "saved-q2-test",
+                    "hash",
+                    '{"grade":"Q2","courses":["Q2:saved only"]}',
+                ),
+            )
+            db.commit()
+        try:
+            with patch.object(app_module, "_load_raw_subjects_for_grade", return_value=[]):
+                payload = self.client.get("/api/courses").get_json()
+        finally:
+            with app_module.app.app_context():
+                db = app_module.get_db()
+                db.execute("DELETE FROM users WHERE username = ?", ("saved-q2-test",))
+                db.commit()
+
+        keys = {item["key"] for item in payload["courses"]}
+        self.assertNotIn("Q2:saved only", keys)
+        self.assertNotIn("EF:saved only", keys)
+        self.assertNotIn("Q1:saved only", keys)
+
     def test_admin_rename_changes_only_the_requested_grade(self):
         self._admin_login()
         response = self.client.post(
@@ -141,6 +203,71 @@ class GradeIsolationTests(unittest.TestCase):
         self.assertEqual(mappings["courses_ef"]["same raw key"], "EF Name")
         self.assertEqual(mappings["courses_q1"]["same raw key"], "Q1 Name")
         self.assertEqual(mappings["courses_q2"]["same raw key"], "Q2 Name")
+
+    def test_legacy_unscoped_backup_restores_users_without_mixing_mappings(self):
+        payload = {
+            "meta": {"version": 3},
+            "database": {
+                "users": [{
+                    "id": 1,
+                    "username": "restored-user",
+                    "password_hash": "hash",
+                    "password_plain": None,
+                    "profile": {"grade": "Q1", "courses": ["Q1:SAME RAW KEY"]},
+                    "created_at": "2026-01-01T00:00:00",
+                }],
+                "vacations": [],
+                "exams_manual": [],
+                "settings": {},
+            },
+            "mappings": {
+                "courses": {"same raw key": "Ambiguous Legacy Name"},
+                "rooms": {},
+            },
+            "seen": {
+                "subjects_raw": [],
+                "rooms_raw": [],
+            },
+        }
+
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            db.execute("DELETE FROM users")
+            db.commit()
+            with (
+                patch.object(app_module, "_save_last_backup"),
+                patch.object(app_module, "_course_map_write_for_grade") as write_grade,
+                patch.object(app_module, "_write_mapping_txt"),
+                patch.object(app_module, "_save_seen_raw"),
+            ):
+                app_module._apply_backup_payload(payload)
+            restored = db.execute(
+                "SELECT username FROM users ORDER BY id"
+            ).fetchall()
+            db.execute("DELETE FROM users")
+            db.commit()
+
+        self.assertEqual([row["username"] for row in restored], ["restored-user"])
+        write_grade.assert_not_called()
+
+    def test_automatic_backup_cannot_replace_more_remote_users(self):
+        remote_response = Mock()
+        remote_response.raise_for_status.return_value = None
+        remote_response.json.return_value = {
+            "database": {"users": [{} for _ in range(60)]},
+        }
+        payload = {"database": {"users": [{}]}}
+
+        with (
+            patch.object(app_module, "BACKUP_WEBHOOK_URL", "https://backup.invalid"),
+            patch.object(app_module, "AUTO_RESTORE_URL", "https://restore.invalid"),
+            patch.object(app_module.requests, "get", return_value=remote_response),
+            patch.object(app_module.requests, "post") as backup_post,
+        ):
+            sent = app_module._maybe_send_backup("profile_update", payload)
+
+        self.assertFalse(sent)
+        backup_post.assert_not_called()
 
     def test_profile_grade_is_explicit_and_controls_rollover(self):
         profile = app_module._normalise_profile({
