@@ -46,6 +46,9 @@ const isStandalone = () =>
 
   window.navigator.standalone === true;
 
+const isLocalPreview = () =>
+  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+
 
 
 (function gateInstall() {
@@ -58,7 +61,7 @@ const isStandalone = () =>
 
 
 
-  if (!isStandalone()) {
+  if (!isStandalone() && !isLocalPreview()) {
 
     gate.style.display = "flex";
 
@@ -2932,6 +2935,7 @@ async function buildCourseSelection(allLessons) {
       : (initialSavedGrades.length === 1 ? initialSavedGrades[0] : "");
     if (activeGrade && getGrade() !== activeGrade) setGrade(activeGrade);
     let setActiveGrade = () => {};
+    let keepOnlyGrade = () => {};
 
     const updateSelectionWarning = () => {
 
@@ -2950,14 +2954,19 @@ async function buildCourseSelection(allLessons) {
       }
 
       warnEl.style.display = "block";
+      cs.style.display = "block";
+      editBtn.style.display = "none";
 
       const gradeLabels = grades.join(", ");
-      const buttons = grades
-        .map(g => `<button type="button" data-keep="${escapeHtml(g)}">Nur ${escapeHtml(g)} behalten</button>`)
+      const buttons = COURSE_GRADE_ORDER
+        .filter(g => selectableGrades.includes(g))
+        .map(g => `<button type="button" data-keep="${escapeHtml(g)}">Nur ${escapeHtml(g)}-Fächer behalten</button>`)
         .join("");
 
       warnEl.innerHTML = `
-        <strong>Hinweis:</strong> ${escapeHtml(gradeLabels)} gleichzeitig ausgewählt. Bitte nur eine Stufe wählen, sonst riskierst du doppelte Einträge.<br>
+        <strong>Kurse aus mehreren Stufen ausgewählt:</strong>
+        Du hast Fächer aus ${escapeHtml(gradeLabels)} ausgewählt.
+        Wähle eine Stufe; alle Fächer der anderen Stufen werden abgewählt.
         <div class="warning-actions">${buttons}</div>
       `;
 
@@ -2967,7 +2976,7 @@ async function buildCourseSelection(allLessons) {
 
           const keep = String(btn.dataset.keep || "").trim().toUpperCase();
 
-          setActiveGrade(keep, true);
+          keepOnlyGrade(keep);
 
         };
 
@@ -2998,37 +3007,13 @@ async function buildCourseSelection(allLessons) {
         btn.textContent = grade;
         btn.className = activeGrade === grade ? "active" : "";
         btn.setAttribute("aria-pressed", activeGrade === grade ? "true" : "false");
-        btn.onclick = () => setActiveGrade(grade, true);
+        btn.onclick = () => setActiveGrade(grade);
         gradeSwitcher.appendChild(btn);
       });
     };
 
-    setActiveGrade = (grade, clearOtherGrades = false) => {
-      const previousActiveGrade = activeGrade;
+    setActiveGrade = (grade) => {
       activeGrade = String(grade || "").trim().toUpperCase();
-      const selectedBodiesToTransfer = [];
-
-      if (clearOtherGrades && previousActiveGrade && previousActiveGrade !== activeGrade) {
-        [...box.querySelectorAll("input[type=checkbox]:checked")].forEach(inp => {
-          if (inputGrade(inp) !== previousActiveGrade) return;
-          const value = String(inp.value || "");
-          const sep = value.indexOf(":");
-          if (sep !== -1) selectedBodiesToTransfer.push(value.slice(sep + 1));
-        });
-      }
-
-      if (clearOtherGrades && activeGrade) {
-        const transferKeys = new Set(selectedBodiesToTransfer.map(body => `${activeGrade}:${body}`));
-        if (!previousActiveGrade) {
-          const legacyKeys = normaliseCourseSelection(rawSaved, activeGrade).keys;
-          legacyKeys.forEach(key => transferKeys.add(key));
-        }
-        [...box.querySelectorAll("input[type=checkbox]")].forEach(inp => {
-          const g = inputGrade(inp);
-          if (g && g !== activeGrade) inp.checked = false;
-          if (transferKeys.has(String(inp.value || ""))) inp.checked = true;
-        });
-      }
 
       panels.forEach(p => {
         const visible = !activeGrade || !p.grade || p.grade === activeGrade;
@@ -3041,6 +3026,25 @@ async function buildCourseSelection(allLessons) {
       if (target) openPanel(target);
       renderGradeSwitcher();
       updateSelectionWarning();
+    };
+
+    keepOnlyGrade = (grade) => {
+      const keep = String(grade || "").trim().toUpperCase();
+      if (!selectableGrades.includes(keep)) return;
+
+      [...box.querySelectorAll("input[type=checkbox]")].forEach(inp => {
+        if (inputGrade(inp) !== keep) inp.checked = false;
+      });
+
+      const keptKeys = [...box.querySelectorAll("input[type=checkbox]:checked")]
+        .filter(inp => inputGrade(inp) === keep)
+        .map(inp => String(inp.value || ""))
+        .filter(Boolean);
+
+      setGrade(keep);
+      setCourses(keptKeys);
+      window.__selectedCourseKeys = new Set(keptKeys);
+      setActiveGrade(keep);
     };
 
     let defaultOpen = null;
@@ -3168,7 +3172,7 @@ async function buildCourseSelection(allLessons) {
     });
 
     if (activeGrade) {
-      setActiveGrade(activeGrade, false);
+      setActiveGrade(activeGrade);
     } else {
       renderGradeSwitcher();
       updateSelectionWarning();
@@ -3192,7 +3196,7 @@ async function buildCourseSelection(allLessons) {
       return;
     }
 
-    const selectedGrade = activeGrade || selectedGrades[0] || "";
+    const selectedGrade = selectedGrades[0] || activeGrade || "";
 
     const selected = selectedInputs
       .filter(i => !selectedGrade || gradeFromKey(i.value) === selectedGrade)
@@ -3226,7 +3230,11 @@ async function buildCourseSelection(allLessons) {
 
 
 
-  if (getCourses().length === 0 || !activeGrade) {
+  const savedGradesAtRender = new Set(
+    getCourses().map(gradeFromKey).filter(Boolean)
+  );
+
+  if (getCourses().length === 0 || !activeGrade || savedGradesAtRender.size > 1) {
 
     cs.style.display = "block";
 

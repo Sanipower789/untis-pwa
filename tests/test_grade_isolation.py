@@ -269,10 +269,26 @@ class GradeIsolationTests(unittest.TestCase):
         self.assertFalse(sent)
         backup_post.assert_not_called()
 
-    def test_profile_grade_is_explicit_and_controls_rollover(self):
+    def test_profile_keeps_mixed_explicit_grades_for_client_cleanup(self):
         profile = app_module._normalise_profile({
             "grade": "Q2",
-            "courses": ["Q1:SAME RAW KEY"],
+            "courses": [
+                "EF:SAME RAW KEY",
+                "Q1:SAME RAW KEY",
+                "Q2:SAME RAW KEY",
+            ],
+        })
+        self.assertEqual(profile["grade"], "Q2")
+        self.assertEqual(profile["courses"], [
+            "EF:same raw key",
+            "Q1:same raw key",
+            "Q2:same raw key",
+        ])
+
+    def test_profile_grade_scopes_only_unprefixed_legacy_courses(self):
+        profile = app_module._normalise_profile({
+            "grade": "Q2",
+            "courses": ["SAME RAW KEY"],
         })
         self.assertEqual(profile["grade"], "Q2")
         self.assertEqual(profile["courses"], ["Q2:same raw key"])

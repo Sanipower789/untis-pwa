@@ -90,8 +90,10 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 .course-group.open .course-group-body{display:block;}
 .course-checklist{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px 12px;max-height:320px;overflow-y:auto;padding:4px 2px;}
 .course-checklist .chk{margin:2px 0;}
-.warning-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;}
-.alert{background:#fff3cd;color:#8a6d3b;border:1px solid #f0d58c;border-radius:8px;padding:10px;margin-bottom:10px}
+.warning-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+.warning-actions button{background:#7a4d00;border:1px solid #593900;border-radius:8px;min-height:36px;padding:7px 10px;}
+.alert{background:#fff3cd;color:#604b16;border:1px solid #f0d58c;border-radius:8px;padding:10px;margin-bottom:10px;line-height:1.45}
+.alert strong{display:block;margin-bottom:2px;}
 @media(min-width:640px){.courses{columns:3}}
 .chk{break-inside:avoid;display:block;margin:6px 0}
 

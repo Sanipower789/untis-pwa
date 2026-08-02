@@ -320,7 +320,7 @@ def _course_grade_and_body(value: str) -> tuple[str, str]:
     return "", raw
 
 def _normalise_profile_courses(values, profile_grade: str = "") -> tuple[list[str], str]:
-    """Normalise profile course keys without guessing an ambiguous grade."""
+    """Normalise course keys while preserving every explicit grade prefix."""
     courses = _normalise_courses(values)
     selected_grade = _normalise_grade(profile_grade)
     explicit_grades = {
@@ -338,12 +338,12 @@ def _normalise_profile_courses(values, profile_grade: str = "") -> tuple[list[st
         nk = norm_key(body)
         if not nk:
             continue
-        if selected_grade:
-            # The explicit profile grade is authoritative. This also performs
-            # the intentional EF -> Q1 -> Q2 rollover when a user changes grade.
-            key = f"{selected_grade}:{nk}"
-        elif course_grade:
+        if course_grade:
+            # Keep mixed legacy selections visible so the client can warn and
+            # let the user choose which grade to retain.
             key = f"{course_grade}:{nk}"
+        elif selected_grade:
+            key = f"{selected_grade}:{nk}"
         else:
             # Keep ambiguous legacy values ungraded so they cannot be assigned
             # to EF merely because EF happens to be first.
