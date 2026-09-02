@@ -219,6 +219,11 @@ class PushNotificationTests(unittest.TestCase):
         self.assertIn('id="notification-timetable"', sidebar_html)
         self.assertIn('id="notification-exams"', sidebar_html)
         self.assertIn('id="notification-summary"', sidebar_html)
+        app_script_response = self.client.get("/static/app.js")
+        app_script = app_script_response.get_data(as_text=True)
+        app_script_response.close()
+        self.assertIn('setStatus("Push-Status wird erneut geprüft."', app_script)
+        self.assertIn("statusRetryTimer = window.setTimeout", app_script)
 
         self._login_admin()
         admin_html = self.client.get("/admin/mappings").get_data(as_text=True)

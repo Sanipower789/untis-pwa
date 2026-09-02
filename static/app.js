@@ -2050,6 +2050,7 @@ const PushNotifications = (() => {
   let preferences = { ...defaultPreferences };
   let preferenceSaveTimer = null;
   let applyingPreferences = false;
+  let statusRetryTimer = null;
 
   function normalisePreferences(value) {
     const source = value && typeof value === "object" ? value : {};
@@ -2303,6 +2304,10 @@ const PushNotifications = (() => {
 
   async function refresh() {
     if (!authenticated || !statusElement) return;
+    if (statusRetryTimer) {
+      window.clearTimeout(statusRetryTimer);
+      statusRetryTimer = null;
+    }
     if (!supported()) {
       setStatus(window.isSecureContext
         ? "Push wird von diesem Browser nicht unterstützt."
@@ -2340,8 +2345,14 @@ const PushNotifications = (() => {
       }
     } catch (error) {
       console.warn("Push status failed:", error);
-      setStatus("Push-Status konnte nicht geladen werden.", "error");
+      setStatus("Push-Status wird erneut geprüft.", "error");
       setControls(false, true);
+      if (authenticated) {
+        statusRetryTimer = window.setTimeout(() => {
+          statusRetryTimer = null;
+          refresh();
+        }, 5000);
+      }
     }
   }
 
@@ -2435,6 +2446,10 @@ const PushNotifications = (() => {
       if (authenticated) {
         refresh();
       } else {
+        if (statusRetryTimer) {
+          window.clearTimeout(statusRetryTimer);
+          statusRetryTimer = null;
+        }
         closePrompt(false);
         setPreferencesStatus("");
       }
