@@ -144,6 +144,7 @@ try:
 except (TypeError, ValueError):
     NOTIFICATION_CHECK_INTERVAL_SECONDS = 300
 NOTIFICATION_CHECK_INTERVAL_SECONDS = max(30, min(3600, NOTIFICATION_CHECK_INTERVAL_SECONDS))
+SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 NOTIFICATION_PREFERENCES_DEFAULTS = {
     "enabled": True,
@@ -173,9 +174,21 @@ def _ensure_db_path() -> None:
     except Exception as exc:
         raise RuntimeError(f"Database path not writable: {DB_PATH} ({exc})")
 
+
+def _connect_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
 def init_db():
     _ensure_db_path()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect_db()
+    journal_mode = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+    if journal_mode != "wal":
+        app.logger.warning("SQLite WAL mode unavailable; active mode is %s", journal_mode)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -323,7 +336,7 @@ def init_db():
 def get_db():
     if "db" not in g:
         _ensure_db_path()
-        conn = sqlite3.connect(DB_PATH)
+        conn = _connect_db()
         conn.row_factory = sqlite3.Row
         g.db = conn
     return g.db
@@ -1204,6 +1217,26 @@ def add_no_cache(resp):
     if request.endpoint == "banner_image":
         return resp
     return _no_store(resp)
+
+
+@app.errorhandler(sqlite3.OperationalError)
+def handle_sqlite_operational_error(exc):
+    conn = g.get("db")
+    if conn is not None:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+    app.logger.exception("SQLite operation failed")
+    if request.path.startswith("/api/"):
+        locked = "locked" in str(exc).lower() or "busy" in str(exc).lower()
+        message = (
+            "Datenbank beschäftigt. Bitte in wenigen Sekunden erneut versuchen."
+            if locked
+            else "Datenbankfehler. Bitte erneut versuchen."
+        )
+        return _no_store(jsonify({"ok": False, "error": message})), 503 if locked else 500
+    return "Database error", 500
 
 @app.route("/")
 def index():
@@ -2493,6 +2526,7 @@ def _fetch_notification_timetable_events(now: datetime) -> list[dict]:
                     )
                 )
             except Exception as exc:
+                get_db().rollback()
                 app.logger.warning(
                     "notification timetable fetch failed for %s/%s: %s",
                     grade,
@@ -2723,6 +2757,7 @@ def _remote_exam_notification_sources(grade: str, today: date) -> list[dict]:
         get_db().commit()
         return exams
     except Exception as exc:
+        get_db().rollback()
         app.logger.warning("notification exam fetch failed for %s: %s", grade, exc)
         exams = cached.get("exams", []) if isinstance(cached.get("exams"), list) else []
         get_db().execute(

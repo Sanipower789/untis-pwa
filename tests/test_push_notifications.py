@@ -231,6 +231,29 @@ class PushNotificationTests(unittest.TestCase):
         self.assertIn('url.pathname === "/api/banner-image"', service_worker)
         self.assertIn("await fresh.blob()", service_worker)
 
+    def test_admin_writes_succeed_while_another_connection_is_reading(self):
+        self._login_admin()
+        reader = app_module.sqlite3.connect(app_module.DB_PATH)
+        try:
+            journal_mode = reader.execute("PRAGMA journal_mode").fetchone()[0]
+            self.assertEqual(str(journal_mode).lower(), "wal")
+            reader.execute("BEGIN")
+            reader.execute("SELECT COUNT(*) FROM users").fetchone()
+
+            response = self.client.post(
+                "/api/admin/vacations",
+                json={
+                    "title": "WAL concurrency test",
+                    "start_date": "2099-12-30",
+                    "end_date": "2099-12-30",
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.get_json()["ok"])
+        finally:
+            reader.rollback()
+            reader.close()
+
     def test_preferences_are_saved_per_account_and_normalised(self):
         self._login_user()
         defaults = self.client.get("/api/notifications/preferences")
