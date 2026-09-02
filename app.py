@@ -1720,18 +1720,21 @@ def api_push_subscription():
 
     db = get_db()
     if request.method == "GET":
-        count = int(
-            db.execute(
-                "SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()[0]
-        )
+        subscriptions = db.execute(
+            "SELECT endpoint FROM push_subscriptions WHERE user_id = ? ORDER BY id",
+            (user_id,),
+        ).fetchall()
+        endpoint_hashes = [
+            hashlib.sha256(str(row["endpoint"]).encode("utf-8")).hexdigest()
+            for row in subscriptions
+        ]
         return _no_store(jsonify({
             "ok": True,
             "configured": _push_configured(),
             "publicKey": VAPID_PUBLIC_KEY if _push_configured() else "",
-            "subscribed": count > 0,
-            "subscriptionCount": count,
+            "subscribed": bool(subscriptions),
+            "subscriptionCount": len(subscriptions),
+            "endpointHashes": endpoint_hashes,
         }))
 
     data = request.get_json(silent=True) or {}

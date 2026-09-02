@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import tempfile
@@ -110,6 +111,10 @@ class PushNotificationTests(unittest.TestCase):
         self.assertTrue(status["subscribed"])
         self.assertEqual(status["subscriptionCount"], 1)
         self.assertEqual(status["publicKey"], "test-public-key")
+        endpoint = self._subscription()["endpoint"]
+        expected_hash = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
+        self.assertEqual(status["endpointHashes"], [expected_hash])
+        self.assertNotIn(endpoint, json.dumps(status))
 
         deleted = self.client.delete(
             "/api/push/subscription",
@@ -223,6 +228,8 @@ class PushNotificationTests(unittest.TestCase):
         service_worker_response.close()
         self.assertIn('addEventListener("push"', service_worker)
         self.assertIn('addEventListener("notificationclick"', service_worker)
+        self.assertIn('url.pathname === "/api/banner-image"', service_worker)
+        self.assertIn("await fresh.blob()", service_worker)
 
     def test_preferences_are_saved_per_account_and_normalised(self):
         self._login_user()

@@ -2224,9 +2224,63 @@ const PushNotifications = (() => {
     return Uint8Array.from(raw, char => char.charCodeAt(0));
   }
 
+  function base64UrlFromBytes(value) {
+    const bytes = new Uint8Array(value || []);
+    let binary = "";
+    bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  function subscriptionUsesKey(subscription, publicKey) {
+    const localKey = subscription?.options?.applicationServerKey;
+    if (!localKey) return true;
+    return base64UrlFromBytes(localKey) === String(publicKey || "").replace(/=+$/, "");
+  }
+
+  async function subscriptionEndpointHash(subscription) {
+    if (!window.crypto?.subtle) return "";
+    const bytes = new TextEncoder().encode(String(subscription?.endpoint || ""));
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function saveSubscription(subscription) {
+    const saved = await fetch("/api/push/subscription", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subscription: subscription.toJSON() }),
+    });
+    const result = await saved.json().catch(() => ({}));
+    if (!saved.ok || !result.ok) throw new Error(result.error || "push_save_failed");
+  }
+
+  async function ensureRegisteredSubscription(config, local) {
+    let subscription = local.subscription;
+    if (subscription && !subscriptionUsesKey(subscription, config.publicKey)) {
+      await fetch("/api/push/subscription", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      });
+      await subscription.unsubscribe();
+      subscription = null;
+    }
+    if (!subscription) {
+      subscription = await local.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: applicationServerKey(config.publicKey),
+      });
+    }
+    const endpointHash = await subscriptionEndpointHash(subscription);
+    const registered = Array.isArray(config.endpointHashes)
+      && config.endpointHashes.includes(endpointHash);
+    if (!registered) await saveSubscription(subscription);
+    return subscription;
+  }
+
   async function registrationAndSubscription() {
     const existing = await navigator.serviceWorker.getRegistration("/");
-    if (!existing) await navigator.serviceWorker.register("/sw.js?v=44");
+    if (!existing) await navigator.serviceWorker.register("/sw.js?v=45");
     const registration = await new Promise((resolve, reject) => {
       const timeout = window.setTimeout(
         () => reject(new Error("service_worker_ready_timeout")),
@@ -2265,21 +2319,22 @@ const PushNotifications = (() => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "push_status_failed");
       if (!data.configured) {
-        setStatus("Push ist auf diesem Testserver nicht eingerichtet.", "error");
+        setStatus("Push ist auf diesem Server nicht eingerichtet.", "error");
         setControls(false, false);
         return;
       }
-      const active = Boolean(local.subscription && data.subscribed);
       if (Notification.permission === "denied") {
         closePrompt(true);
         setStatus("Benachrichtigungen sind in den Geräteeinstellungen blockiert.", "error");
-        setControls(active, false);
-      } else if (active) {
+        setControls(false, false);
+      } else if (Notification.permission === "granted") {
+        setStatus("Gerät wird verbunden.");
+        await ensureRegisteredSubscription(data, local);
         closePrompt(true);
         setStatus("Auf diesem Gerät aktiviert.", "ok");
         setControls(true);
       } else {
-        setStatus("Auf diesem Gerät deaktiviert.");
+        setStatus("Auf diesem Gerät noch nicht aktiviert.");
         setControls(false, true);
         queuePrompt();
       }
@@ -2311,18 +2366,8 @@ const PushNotifications = (() => {
         throw new Error(config.error || "push_not_configured");
       }
 
-      const { registration, subscription: existing } = await registrationAndSubscription();
-      const subscription = existing || await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: applicationServerKey(config.publicKey),
-      });
-      const saved = await fetch("/api/push/subscription", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subscription: subscription.toJSON() }),
-      });
-      const result = await saved.json().catch(() => ({}));
-      if (!saved.ok || !result.ok) throw new Error(result.error || "push_save_failed");
+      const local = await registrationAndSubscription();
+      await ensureRegisteredSubscription(config, local);
       setStatus("Auf diesem Gerät aktiviert.", "ok");
       setControls(true);
     } catch (error) {
@@ -4448,7 +4493,7 @@ if ("serviceWorker" in navigator) {
 
     try {
 
-      const reg = await navigator.serviceWorker.register("/sw.js?v=44");
+      const reg = await navigator.serviceWorker.register("/sw.js?v=45");
 
       reg.update();
 

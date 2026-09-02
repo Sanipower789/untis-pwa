@@ -1,5 +1,5 @@
 // static/sw.js
-const CACHE = "untis-cache-v44";
+const CACHE = "untis-cache-v45";
 const CORE = ["/"]; // just cache the shell (index.html)
 
 self.addEventListener("install", (e) => {
@@ -25,6 +25,29 @@ self.addEventListener("message", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
+
+  // Buffer the complete banner before responding so mobile browsers never
+  // render and retain a partially streamed image.
+  if (url.pathname === "/api/banner-image") {
+    event.respondWith((async () => {
+      try {
+        const fresh = await fetch(event.request, { cache: "no-store" });
+        if (!fresh.ok) throw new Error("banner_fetch_failed");
+        const body = await fresh.blob();
+        const complete = new Response(body, {
+          status: fresh.status,
+          statusText: fresh.statusText,
+          headers: fresh.headers,
+        });
+        const cache = await caches.open(CACHE);
+        await cache.put(event.request, complete.clone());
+        return complete;
+      } catch {
+        return (await caches.match(event.request)) || new Response("", { status: 503 });
+      }
+    })());
+    return;
+  }
 
   // --- API: always fresh, fallback if offline
   if (url.pathname.startsWith("/api/")) {
