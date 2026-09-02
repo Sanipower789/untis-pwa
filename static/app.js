@@ -2006,6 +2006,408 @@ syncColorInputs(ColorPrefs.load());
 
 
 
+const PushNotifications = (() => {
+  const settingsElement = document.getElementById("sidebar-notifications");
+  const enableButton = document.getElementById("push-enable");
+  const disableButton = document.getElementById("push-disable");
+  const statusElement = document.getElementById("push-status");
+  const promptElement = document.getElementById("push-prompt");
+  const promptEnableButton = document.getElementById("push-prompt-enable");
+  const promptLaterButton = document.getElementById("push-prompt-later");
+  const preferencesStatus = document.getElementById("notification-preferences-status");
+  const preferenceElements = {
+    enabled: document.getElementById("notification-enabled"),
+    timetableChanges: document.getElementById("notification-timetable"),
+    cancellations: document.getElementById("notification-cancellations"),
+    additions: document.getElementById("notification-additions"),
+    roomChanges: document.getElementById("notification-room"),
+    timeChanges: document.getElementById("notification-time"),
+    otherChanges: document.getElementById("notification-other"),
+    examReminders: document.getElementById("notification-exams"),
+    examReminderDays: document.getElementById("notification-exam-days"),
+    dailySummary: document.getElementById("notification-summary"),
+    dailySummaryTime: document.getElementById("notification-summary-time"),
+  };
+  const defaultPreferences = {
+    enabled: true,
+    timetableChanges: true,
+    cancellations: true,
+    additions: true,
+    roomChanges: true,
+    timeChanges: true,
+    otherChanges: true,
+    examReminders: true,
+    examReminderDays: 1,
+    dailySummary: false,
+    dailySummaryTime: "18:00",
+  };
+  const promptSeenKey = "untis-push-prompt-seen-v1";
+  let authenticated = false;
+  let initialised = false;
+  let busy = false;
+  let promptTimer = null;
+  let promptDismissed = false;
+  let preferences = { ...defaultPreferences };
+  let preferenceSaveTimer = null;
+  let applyingPreferences = false;
+
+  function normalisePreferences(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const next = { ...defaultPreferences };
+    Object.keys(next).forEach(key => {
+      if (!(key in source)) return;
+      if (key === "examReminderDays") {
+        const days = Number.parseInt(source[key], 10);
+        next[key] = Number.isFinite(days) ? Math.max(0, Math.min(14, days)) : next[key];
+      } else if (key === "dailySummaryTime") {
+        next[key] = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(source[key]))
+          ? String(source[key])
+          : next[key];
+      } else {
+        next[key] = Boolean(source[key]);
+      }
+    });
+    return next;
+  }
+
+  function updatePreferenceDependencies() {
+    const masterEnabled = Boolean(preferences.enabled);
+    Object.entries(preferenceElements).forEach(([key, element]) => {
+      if (!element || key === "enabled") return;
+      element.disabled = !masterEnabled;
+    });
+    ["cancellations", "additions", "roomChanges", "timeChanges", "otherChanges"]
+      .forEach(key => {
+        if (preferenceElements[key]) {
+          preferenceElements[key].disabled = !masterEnabled || !preferences.timetableChanges;
+        }
+      });
+    if (preferenceElements.examReminderDays) {
+      preferenceElements.examReminderDays.disabled = !masterEnabled || !preferences.examReminders;
+    }
+    if (preferenceElements.dailySummaryTime) {
+      preferenceElements.dailySummaryTime.disabled = !masterEnabled || !preferences.dailySummary;
+    }
+  }
+
+  function renderPreferences() {
+    applyingPreferences = true;
+    Object.entries(preferenceElements).forEach(([key, element]) => {
+      if (!element) return;
+      if (element.type === "checkbox") element.checked = Boolean(preferences[key]);
+      else element.value = String(preferences[key]);
+    });
+    updatePreferenceDependencies();
+    applyingPreferences = false;
+  }
+
+  function readPreferences() {
+    const next = { ...preferences };
+    Object.entries(preferenceElements).forEach(([key, element]) => {
+      if (!element) return;
+      next[key] = element.type === "checkbox" ? element.checked : element.value;
+    });
+    return normalisePreferences(next);
+  }
+
+  function setPreferencesStatus(message, tone = "") {
+    if (!preferencesStatus) return;
+    preferencesStatus.textContent = message;
+    preferencesStatus.classList.toggle("status-ok", tone === "ok");
+    preferencesStatus.classList.toggle("status-error", tone === "error");
+  }
+
+  async function savePreferences() {
+    if (!authenticated) return;
+    setPreferencesStatus("Wird gespeichert.");
+    try {
+      const response = await fetch("/api/notifications/preferences", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferences }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || "preferences_save_failed");
+      preferences = normalisePreferences(data.preferences);
+      renderPreferences();
+      setPreferencesStatus("Gespeichert.", "ok");
+    } catch (error) {
+      console.error("Notification preferences save failed:", error);
+      setPreferencesStatus("Einstellungen konnten nicht gespeichert werden.", "error");
+    }
+  }
+
+  function schedulePreferencesSave() {
+    if (applyingPreferences || !authenticated) return;
+    preferences = readPreferences();
+    renderPreferences();
+    setPreferencesStatus("Ungespeicherte Änderung.");
+    if (preferenceSaveTimer) window.clearTimeout(preferenceSaveTimer);
+    preferenceSaveTimer = window.setTimeout(savePreferences, 350);
+  }
+
+  function supported() {
+    return Boolean(
+      window.isSecureContext
+      && "serviceWorker" in navigator
+      && "PushManager" in window
+      && "Notification" in window
+    );
+  }
+
+  function hasSeenPrompt() {
+    if (promptDismissed) return true;
+    try {
+      return localStorage.getItem(promptSeenKey) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function markPromptSeen() {
+    promptDismissed = true;
+    try { localStorage.setItem(promptSeenKey, "1"); } catch {}
+  }
+
+  function closePrompt(markSeen = false) {
+    if (markSeen) markPromptSeen();
+    if (promptTimer) {
+      window.clearTimeout(promptTimer);
+      promptTimer = null;
+    }
+    promptElement?.setAttribute("aria-hidden", "true");
+  }
+
+  function queuePrompt() {
+    if (
+      !promptElement
+      || !authenticated
+      || !supported()
+      || Notification.permission !== "default"
+      || hasSeenPrompt()
+      || promptElement.getAttribute("aria-hidden") === "false"
+      || promptTimer
+    ) return;
+    promptTimer = window.setTimeout(() => {
+      promptTimer = null;
+      if (
+        authenticated
+        && supported()
+        && Notification.permission === "default"
+        && !hasSeenPrompt()
+      ) promptElement.setAttribute("aria-hidden", "false");
+    }, 700);
+  }
+
+  function setStatus(message, tone = "") {
+    if (!statusElement) return;
+    statusElement.textContent = message;
+    statusElement.classList.toggle("status-ok", tone === "ok");
+    statusElement.classList.toggle("status-error", tone === "error");
+  }
+
+  function setControls(active, canEnable = true) {
+    if (enableButton) {
+      enableButton.hidden = active;
+      enableButton.disabled = busy || !canEnable;
+    }
+    if (disableButton) {
+      disableButton.hidden = !active;
+      disableButton.disabled = busy;
+    }
+  }
+
+  function applicationServerKey(value) {
+    const padding = "=".repeat((4 - value.length % 4) % 4);
+    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    return Uint8Array.from(raw, char => char.charCodeAt(0));
+  }
+
+  async function registrationAndSubscription() {
+    const existing = await navigator.serviceWorker.getRegistration("/");
+    if (!existing) await navigator.serviceWorker.register("/sw.js?v=44");
+    const registration = await new Promise((resolve, reject) => {
+      const timeout = window.setTimeout(
+        () => reject(new Error("service_worker_ready_timeout")),
+        8000,
+      );
+      navigator.serviceWorker.ready.then(
+        value => {
+          window.clearTimeout(timeout);
+          resolve(value);
+        },
+        error => {
+          window.clearTimeout(timeout);
+          reject(error);
+        },
+      );
+    });
+    const subscription = await registration.pushManager.getSubscription();
+    return { registration, subscription };
+  }
+
+  async function refresh() {
+    if (!authenticated || !statusElement) return;
+    if (!supported()) {
+      setStatus(window.isSecureContext
+        ? "Push wird von diesem Browser nicht unterstützt."
+        : "Push benötigt eine sichere HTTPS-Verbindung.", "error");
+      setControls(false, false);
+      return;
+    }
+
+    try {
+      const [response, local] = await Promise.all([
+        fetch("/api/push/subscription", { cache: "no-store" }),
+        registrationAndSubscription(),
+      ]);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "push_status_failed");
+      if (!data.configured) {
+        setStatus("Push ist auf diesem Testserver nicht eingerichtet.", "error");
+        setControls(false, false);
+        return;
+      }
+      const active = Boolean(local.subscription && data.subscribed);
+      if (Notification.permission === "denied") {
+        closePrompt(true);
+        setStatus("Benachrichtigungen sind in den Geräteeinstellungen blockiert.", "error");
+        setControls(active, false);
+      } else if (active) {
+        closePrompt(true);
+        setStatus("Auf diesem Gerät aktiviert.", "ok");
+        setControls(true);
+      } else {
+        setStatus("Auf diesem Gerät deaktiviert.");
+        setControls(false, true);
+        queuePrompt();
+      }
+    } catch (error) {
+      console.warn("Push status failed:", error);
+      setStatus("Push-Status konnte nicht geladen werden.", "error");
+      setControls(false, true);
+    }
+  }
+
+  async function enable() {
+    if (busy || !authenticated || !supported()) return;
+    closePrompt(true);
+    busy = true;
+    setControls(false, false);
+    setStatus("Berechtigung wird angefragt.");
+    try {
+      const permission = Notification.permission === "default"
+        ? await Notification.requestPermission()
+        : Notification.permission;
+      if (permission !== "granted") {
+        setStatus("Benachrichtigungen wurden nicht erlaubt.", "error");
+        return;
+      }
+
+      const response = await fetch("/api/push/subscription", { cache: "no-store" });
+      const config = await response.json().catch(() => ({}));
+      if (!response.ok || !config.configured || !config.publicKey) {
+        throw new Error(config.error || "push_not_configured");
+      }
+
+      const { registration, subscription: existing } = await registrationAndSubscription();
+      const subscription = existing || await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: applicationServerKey(config.publicKey),
+      });
+      const saved = await fetch("/api/push/subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      });
+      const result = await saved.json().catch(() => ({}));
+      if (!saved.ok || !result.ok) throw new Error(result.error || "push_save_failed");
+      setStatus("Auf diesem Gerät aktiviert.", "ok");
+      setControls(true);
+    } catch (error) {
+      console.error("Push enable failed:", error);
+      setStatus("Benachrichtigungen konnten nicht aktiviert werden.", "error");
+      setControls(false, true);
+    } finally {
+      busy = false;
+      await refresh();
+    }
+  }
+
+  async function disable() {
+    if (busy || !authenticated || !supported()) return;
+    busy = true;
+    setControls(true);
+    setStatus("Wird deaktiviert.");
+    try {
+      const { subscription } = await registrationAndSubscription();
+      if (subscription) {
+        await fetch("/api/push/subscription", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subscription: subscription.toJSON() }),
+        });
+        await subscription.unsubscribe();
+      }
+      setStatus("Auf diesem Gerät deaktiviert.");
+      setControls(false, true);
+    } catch (error) {
+      console.error("Push disable failed:", error);
+      setStatus("Benachrichtigungen konnten nicht deaktiviert werden.", "error");
+    } finally {
+      busy = false;
+      await refresh();
+    }
+  }
+
+  return {
+    init() {
+      if (initialised) return;
+      initialised = true;
+      enableButton?.addEventListener("click", enable);
+      disableButton?.addEventListener("click", disable);
+      promptEnableButton?.addEventListener("click", enable);
+      promptLaterButton?.addEventListener("click", () => closePrompt(true));
+      Object.values(preferenceElements).forEach(element => {
+        element?.addEventListener("change", schedulePreferencesSave);
+      });
+      renderPreferences();
+      promptElement?.addEventListener("click", event => {
+        if (event.target === promptElement || event.target.classList.contains("auth-backdrop")) {
+          closePrompt(true);
+        }
+      });
+      document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && promptElement?.getAttribute("aria-hidden") === "false") {
+          closePrompt(true);
+        }
+      });
+    },
+    setAuthenticated(value) {
+      authenticated = Boolean(value);
+      if (settingsElement) settingsElement.hidden = !authenticated;
+      if (authenticated) {
+        refresh();
+      } else {
+        closePrompt(false);
+        setPreferencesStatus("");
+      }
+    },
+    setPreferences(value) {
+      preferences = normalisePreferences(value);
+      renderPreferences();
+      setPreferencesStatus("");
+    },
+    getPreferences() {
+      return { ...preferences };
+    },
+    refresh,
+  };
+})();
+
+
+
 const Auth = (() => {
 
   const authButton = document.getElementById("auth-button");
@@ -2189,7 +2591,9 @@ function showView(view) {
 
       klausuren: KlausurenStore.load(),
 
-      colors: ColorPrefs.load()
+      colors: ColorPrefs.load(),
+
+      notificationPreferences: PushNotifications.getPreferences()
 
     };
 
@@ -2313,6 +2717,7 @@ function showView(view) {
       if (typeof profile.grade === "string") setGrade(profile.grade);
       if (Array.isArray(profile.courses)) setCourses(profile.courses);
       if (Array.isArray(profile.klausuren)) KlausurenStore.save(profile.klausuren);
+      PushNotifications.setPreferences(profile.notificationPreferences);
     });
     try { syncColorInputs(ColorPrefs.load()); } catch {}
     try {
@@ -2500,6 +2905,8 @@ function showView(view) {
     setButtonLabel();
 
     setAccountInfo();
+
+    PushNotifications.setAuthenticated(state.loggedIn);
 
     if (state.loggedIn) {
 
@@ -4041,7 +4448,7 @@ if ("serviceWorker" in navigator) {
 
     try {
 
-      const reg = await navigator.serviceWorker.register("/sw.js");
+      const reg = await navigator.serviceWorker.register("/sw.js?v=44");
 
       reg.update();
 
@@ -4111,6 +4518,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
 
+      PushNotifications.init();
       await Auth.init();
       const enforceLogin = typeof isStandalone === "function" && isStandalone();
       if (enforceLogin) {

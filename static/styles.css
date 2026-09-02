@@ -334,6 +334,32 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
 .sidebar-link.active{ background:#2b2b2b; border-color:#444; }
 .sidebar-panel .form{ display:grid; gap:8px; }
 .sidebar .primary { background:#4a7; border:1px solid #4a7; color:#061; }
+.sidebar-notifications{
+  display:grid;
+  gap:8px;
+  margin-bottom:12px;
+  padding:12px;
+  background:#171820;
+  border:1px solid #2a2d37;
+  border-radius:8px;
+}
+.sidebar-notifications[hidden]{display:none;}
+.sidebar-notifications h3,
+.sidebar-notifications p{margin:0;}
+.notification-preferences{border-top:1px solid #2a2d37;padding-top:8px;}
+.notification-preferences summary{cursor:pointer;font-weight:700;padding:4px 0;}
+.notification-preferences-body{display:grid;gap:12px;padding-top:10px;}
+.notification-group{display:grid;gap:8px;margin:0;padding:10px 0 0;border:0;border-top:1px solid #2a2d37;}
+.notification-group legend{padding:0 8px 0 0;color:#aeb3bf;font-size:.82rem;font-weight:700;}
+.notification-toggle{display:flex;align-items:center;gap:9px;min-height:30px;cursor:pointer;}
+.notification-toggle input{width:18px;height:18px;flex:0 0 auto;accent-color:#7b1fa2;}
+.notification-toggle-master{font-weight:700;}
+.notification-subgroup{display:grid;gap:5px;padding-left:16px;}
+.notification-select-row{display:grid;grid-template-columns:minmax(70px,1fr) minmax(0,1.5fr);align-items:center;gap:8px;}
+.notification-select-row select,
+.notification-select-row input{width:100%;min-width:0;box-sizing:border-box;}
+.notification-preferences :disabled{opacity:.55;cursor:not-allowed;}
+#notification-preferences-status{min-height:1.2em;}
 
 .klausur-list{ margin-top:8px; display:grid; gap:8px; }
 .klausur-item{
@@ -588,3 +614,10 @@ button.primary{background:#2f7a53;border:1px solid #2f7a53}
   display:grid;
   gap:12px;
 }
+.notification-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.notification-actions button{flex:1;min-width:120px;}
+.sidebar-notifications .status-error{color:#ff8b8b;}
+.sidebar-notifications .status-ok{color:#76d6a1;}
+.push-prompt-card p{margin:8px 0 18px;line-height:1.45;}
+.push-prompt-actions{display:flex;justify-content:flex-end;gap:8px;}
+.push-prompt-actions button{min-width:110px;}

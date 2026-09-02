@@ -29,6 +29,7 @@ os.environ.update({
     "UNTIS_USER_Q2": "q2-user",
     "UNTIS_PASS_Q2": "q2-pass",
     "UNTIS_ELEMENT_ID_Q2": "3",
+    "NOTIFICATION_MONITOR_ENABLED": "false",
 })
 
 import app as app_module
@@ -181,6 +182,10 @@ class GradeIsolationTests(unittest.TestCase):
         admin_html = self.client.get("/admin/mappings").get_data(as_text=True)
         self.assertIn('id="subjects-q2"', admin_html)
         self.assertIn('id="save-sub-q2"', admin_html)
+        self.assertIn(
+            '<details class="card collapsible-card" id="users">',
+            admin_html,
+        )
         for grade in ("ef", "q1", "q2"):
             self.assertIn(
                 f'id="only-unmapped-sub-{grade}" checked',

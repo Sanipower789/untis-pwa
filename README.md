@@ -19,6 +19,14 @@ At the yearly rollover, do not leave the same Untis account assigned to two grad
 - Cookies: `HttpOnly`, `Secure`, `SameSite=Lax`, lifetime 30 days, `SESSION_PERMANENT=True`.
 - If `SECRET_KEY` changes, all users are logged out. Set it once in Render env and keep it stable.
 
+## Push notifications
+- `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are one matching Web Push key pair. Keep both values stable across deployments or existing device subscriptions stop working.
+- `VAPID_SUBJECT` is a contact URI such as `mailto:admin@example.com`.
+- `NOTIFICATION_MONITOR_ENABLED=true` starts automatic timetable-change checks, exam reminders, and optional next-day summaries.
+- `NOTIFICATION_CHECK_INTERVAL_SECONDS` controls the timetable polling interval (default `300`, allowed range `30` to `3600`).
+
+Notification preferences are saved per account and included in the normal backup. Timetable snapshots are isolated by grade and week; the first successful check only creates a baseline and sends no change alerts. A sleeping Render service cannot run background checks, so reliable scheduled delivery requires an always-on instance or an external service that keeps the web service awake.
+
 ## Optional remote backup (free) via Google Drive
 `app.py` can POST backups to `BACKUP_WEBHOOK_URL` and auto-restore from `AUTO_RESTORE_URL` when the DB is empty.
 

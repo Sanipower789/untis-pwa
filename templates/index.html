@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mein Stundenplan</title>
 
-  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=40">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=44">
   <meta name="theme-color" content="#6a1b9a" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=40">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=44">
 </head>
 <body>
 
@@ -70,6 +70,71 @@
       <button type="button" id="navKlausuren" class="sidebar-link active">Klausuren</button>
       <button type="button" id="navColors" class="sidebar-link">Farben</button>
     </nav>
+
+    <section id="sidebar-notifications" class="sidebar-notifications" hidden>
+      <h3>Benachrichtigungen</h3>
+      <p id="push-status" class="muted small" role="status" aria-live="polite">Status wird geladen.</p>
+      <div class="notification-actions">
+        <button id="push-enable" type="button" class="primary">Aktivieren</button>
+        <button id="push-disable" type="button" class="plain" hidden>Deaktivieren</button>
+      </div>
+      <details class="notification-preferences">
+        <summary>Einstellungen</summary>
+        <div class="notification-preferences-body">
+          <label class="notification-toggle notification-toggle-master">
+            <input id="notification-enabled" type="checkbox">
+            <span>Automatische Hinweise</span>
+          </label>
+
+          <fieldset class="notification-group">
+            <legend>Stundenplan</legend>
+            <label class="notification-toggle">
+              <input id="notification-timetable" type="checkbox">
+              <span>Änderungen</span>
+            </label>
+            <div id="notification-timetable-options" class="notification-subgroup">
+              <label class="notification-toggle"><input id="notification-cancellations" type="checkbox"><span>Ausfälle</span></label>
+              <label class="notification-toggle"><input id="notification-additions" type="checkbox"><span>Neue Stunden</span></label>
+              <label class="notification-toggle"><input id="notification-room" type="checkbox"><span>Raumänderungen</span></label>
+              <label class="notification-toggle"><input id="notification-time" type="checkbox"><span>Zeitänderungen</span></label>
+              <label class="notification-toggle"><input id="notification-other" type="checkbox"><span>Vertretungen und Hinweise</span></label>
+            </div>
+          </fieldset>
+
+          <fieldset class="notification-group">
+            <legend>Klausuren</legend>
+            <label class="notification-toggle">
+              <input id="notification-exams" type="checkbox">
+              <span>Erinnerungen</span>
+            </label>
+            <label class="notification-select-row" for="notification-exam-days">
+              <span>Vorlauf</span>
+              <select id="notification-exam-days">
+                <option value="0">Am selben Tag</option>
+                <option value="1">1 Tag vorher</option>
+                <option value="2">2 Tage vorher</option>
+                <option value="3">3 Tage vorher</option>
+                <option value="7">7 Tage vorher</option>
+                <option value="14">14 Tage vorher</option>
+              </select>
+            </label>
+          </fieldset>
+
+          <fieldset class="notification-group">
+            <legend>Tagesübersicht</legend>
+            <label class="notification-toggle">
+              <input id="notification-summary" type="checkbox">
+              <span>Plan für morgen</span>
+            </label>
+            <label class="notification-select-row" for="notification-summary-time">
+              <span>Uhrzeit</span>
+              <input id="notification-summary-time" type="time" step="300">
+            </label>
+          </fieldset>
+          <p id="notification-preferences-status" class="muted small" role="status" aria-live="polite"></p>
+        </div>
+      </details>
+    </section>
 
     <!-- Klausuren Panel -->
     <section id="panelKlausuren" class="sidebar-panel">
@@ -224,12 +289,19 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='app.js') }}?v=40"></script>
-  <script>
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v=40");
-    }
-  </script>
+  <div id="push-prompt" class="auth-modal" aria-hidden="true">
+    <div class="auth-backdrop"></div>
+    <div class="auth-card push-prompt-card" role="dialog" aria-modal="true" aria-labelledby="push-prompt-title">
+      <h2 id="push-prompt-title">Benachrichtigungen aktivieren?</h2>
+      <p class="muted">Möchtest du wichtige Hinweise direkt auf diesem Gerät erhalten?</p>
+      <div class="push-prompt-actions">
+        <button id="push-prompt-later" type="button" class="plain">Später</button>
+        <button id="push-prompt-enable" type="button" class="primary">Aktivieren</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}?v=44"></script>
 </body>
 </html>
 

@@ -1,5 +1,6 @@
-import os, json, time, re, sqlite3, shutil, requests, threading, base64, binascii
+import os, json, time, re, sqlite3, shutil, requests, threading, base64, binascii, tempfile, hashlib
 from datetime import datetime, timedelta, date
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 try:
     from dotenv import load_dotenv
@@ -13,6 +14,11 @@ from flask import (
     redirect, url_for, session, g, send_from_directory
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+
+try:
+    from pywebpush import webpush
+except Exception:
+    webpush = None
 
 LAST_GOOD_PATH = "last_good_timetable.json"
 LAST_GOOD = None
@@ -119,12 +125,39 @@ SETTINGS_DEFAULTS  = {
     "imageBannerAlt": "Schulbanner",
     "imageBannerUpdatedAt": "0",
 }
-BACKUP_VERSION     = 4
+BACKUP_VERSION     = 6
 SUPPORTED_GRADES   = ("EF", "Q1", "Q2")
 IMAGE_BANNER_WIDTH = 1600
 IMAGE_BANNER_HEIGHT = 400
 IMAGE_BANNER_MAX_BYTES = 1536 * 1024
 IMAGE_BANNER_MAX_REQUEST_BYTES = 3 * 1024 * 1024
+VAPID_PUBLIC_KEY = str(os.environ.get("VAPID_PUBLIC_KEY") or "").strip()
+VAPID_PRIVATE_KEY = str(os.environ.get("VAPID_PRIVATE_KEY") or "").strip()
+VAPID_SUBJECT = str(os.environ.get("VAPID_SUBJECT") or "").strip()
+NOTIFICATION_MONITOR_ENABLED = str(
+    os.environ.get("NOTIFICATION_MONITOR_ENABLED") or ""
+).strip().lower() in ("1", "true", "yes", "on")
+try:
+    NOTIFICATION_CHECK_INTERVAL_SECONDS = int(
+        os.environ.get("NOTIFICATION_CHECK_INTERVAL_SECONDS", "300")
+    )
+except (TypeError, ValueError):
+    NOTIFICATION_CHECK_INTERVAL_SECONDS = 300
+NOTIFICATION_CHECK_INTERVAL_SECONDS = max(30, min(3600, NOTIFICATION_CHECK_INTERVAL_SECONDS))
+
+NOTIFICATION_PREFERENCES_DEFAULTS = {
+    "enabled": True,
+    "timetableChanges": True,
+    "cancellations": True,
+    "additions": True,
+    "roomChanges": True,
+    "timeChanges": True,
+    "otherChanges": True,
+    "examReminders": True,
+    "examReminderDays": 1,
+    "dailySummary": False,
+    "dailySummaryTime": "18:00",
+}
 
 if not ADMIN_TOKEN:
     raise RuntimeError("ADMIN_TOKEN environment variable is required and must not be empty.")
@@ -134,9 +167,8 @@ def _ensure_db_path() -> None:
     db_dir = os.path.dirname(DB_PATH) or "."
     try:
         os.makedirs(db_dir, exist_ok=True)
-        test_path = os.path.join(db_dir, ".db_write_test")
-        with open(test_path, "w", encoding="utf-8") as f:
-            f.write("ok")
+        fd, test_path = tempfile.mkstemp(prefix=".db_write_test_", dir=db_dir)
+        os.close(fd)
         os.remove(test_path)
     except Exception as exc:
         raise RuntimeError(f"Database path not writable: {DB_PATH} ({exc})")
@@ -195,6 +227,54 @@ def init_db():
             note TEXT,
             grade TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_agent TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_id ON push_subscriptions(user_id)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_snapshots (
+            grade TEXT NOT NULL,
+            week_start TEXT NOT NULL,
+            lessons_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (grade, week_start)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_deliveries (
+            user_id INTEGER NOT NULL,
+            event_key TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, event_key),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_runtime (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         )
         """
     )
@@ -292,6 +372,7 @@ def _empty_profile():
         "courses": [],
         "klausuren": [],
         "colors": {"theme": {}, "subjects": {}},
+        "notificationPreferences": dict(NOTIFICATION_PREFERENCES_DEFAULTS),
     }
 
 def _normalise_courses(value):
@@ -420,6 +501,35 @@ def _normalise_colors(block):
                 norm["subjects"][nk] = cleaned
     return norm
 
+
+def _normalise_notification_preferences(value) -> dict:
+    source = value if isinstance(value, dict) else {}
+    preferences = dict(NOTIFICATION_PREFERENCES_DEFAULTS)
+    for key in (
+        "enabled",
+        "timetableChanges",
+        "cancellations",
+        "additions",
+        "roomChanges",
+        "timeChanges",
+        "otherChanges",
+        "examReminders",
+        "dailySummary",
+    ):
+        if key in source:
+            preferences[key] = bool(source[key])
+
+    try:
+        reminder_days = int(source.get("examReminderDays", preferences["examReminderDays"]))
+    except (TypeError, ValueError):
+        reminder_days = preferences["examReminderDays"]
+    preferences["examReminderDays"] = max(0, min(14, reminder_days))
+
+    summary_time = str(source.get("dailySummaryTime") or preferences["dailySummaryTime"]).strip()
+    match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", summary_time)
+    preferences["dailySummaryTime"] = summary_time if match else NOTIFICATION_PREFERENCES_DEFAULTS["dailySummaryTime"]
+    return preferences
+
 def _normalise_profile(payload):
     if not isinstance(payload, dict):
         payload = {}
@@ -431,6 +541,9 @@ def _normalise_profile(payload):
     )
     profile["klausuren"] = _normalise_klausuren(payload.get("klausuren"))
     profile["colors"] = _normalise_colors(payload.get("colors"))
+    profile["notificationPreferences"] = _normalise_notification_preferences(
+        payload.get("notificationPreferences")
+    )
     return profile
 
 def _load_profile_for_user(row):
@@ -1519,6 +1632,174 @@ def api_auth_logout():
     session.clear()
     return _no_store(jsonify({"ok": True, "authenticated": False}))
 
+
+def _push_configured() -> bool:
+    valid_subject = VAPID_SUBJECT.startswith("mailto:") or VAPID_SUBJECT.startswith("https://")
+    return bool(webpush and VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and valid_subject)
+
+
+def _normalise_push_subscription(payload) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("push_subscription_invalid")
+    subscription = payload.get("subscription") if isinstance(payload.get("subscription"), dict) else payload
+    endpoint = str(subscription.get("endpoint") or "").strip()
+    keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
+    p256dh = str(keys.get("p256dh") or "").strip()
+    auth = str(keys.get("auth") or "").strip()
+    parsed_endpoint = urlparse(endpoint)
+    if (
+        parsed_endpoint.scheme != "https"
+        or not parsed_endpoint.netloc
+        or len(endpoint) > 4096
+        or not p256dh
+        or len(p256dh) > 1024
+        or not auth
+        or len(auth) > 1024
+    ):
+        raise ValueError("push_subscription_invalid")
+    return {"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}}
+
+
+def _send_push_rows(rows, payload: dict, ttl: int = 300) -> dict:
+    notification = json.dumps(payload, ensure_ascii=False)
+    sent = 0
+    failed = 0
+    stale_ids: list[int] = []
+    for row in rows:
+        try:
+            webpush(
+                subscription_info={
+                    "endpoint": row["endpoint"],
+                    "keys": {"p256dh": row["p256dh"], "auth": row["auth"]},
+                },
+                data=notification,
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={"sub": VAPID_SUBJECT},
+                ttl=ttl,
+                timeout=10,
+            )
+            sent += 1
+        except Exception as exc:
+            failed += 1
+            response = getattr(exc, "response", None)
+            if getattr(response, "status_code", None) in (404, 410):
+                stale_ids.append(int(row["id"]))
+            app.logger.warning("push failed for subscription %s: %s", row["id"], exc)
+
+    if stale_ids:
+        placeholders = ",".join("?" for _ in stale_ids)
+        get_db().execute(
+            f"DELETE FROM push_subscriptions WHERE id IN ({placeholders})",
+            stale_ids,
+        )
+        get_db().commit()
+        _maybe_send_backup("push_stale_cleanup")
+    return {
+        "sent": sent,
+        "failed": failed,
+        "removed": len(stale_ids),
+        "attempted": len(rows),
+    }
+
+
+def _send_push_to_user(user_id: int, payload: dict, ttl: int = 300) -> dict:
+    rows = get_db().execute(
+        "SELECT id, user_id, endpoint, p256dh, auth "
+        "FROM push_subscriptions WHERE user_id = ? ORDER BY id",
+        (user_id,),
+    ).fetchall()
+    return _send_push_rows(rows, payload, ttl=ttl)
+
+
+@app.route("/api/push/subscription", methods=["GET", "POST", "DELETE"])
+def api_push_subscription():
+    user_id = _current_user_id()
+    if not _load_user(user_id):
+        session.pop("user_id", None)
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    db = get_db()
+    if request.method == "GET":
+        count = int(
+            db.execute(
+                "SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()[0]
+        )
+        return _no_store(jsonify({
+            "ok": True,
+            "configured": _push_configured(),
+            "publicKey": VAPID_PUBLIC_KEY if _push_configured() else "",
+            "subscribed": count > 0,
+            "subscriptionCount": count,
+        }))
+
+    data = request.get_json(silent=True) or {}
+    try:
+        subscription = _normalise_push_subscription(data)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    endpoint = subscription["endpoint"]
+    if request.method == "DELETE":
+        cursor = db.execute(
+            "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+            (user_id, endpoint),
+        )
+        db.commit()
+        if cursor.rowcount:
+            _maybe_send_backup("push_subscription_delete")
+        return _no_store(jsonify({"ok": True, "deleted": cursor.rowcount > 0}))
+
+    if not _push_configured():
+        return jsonify({"ok": False, "error": "push_not_configured"}), 503
+    db.execute(
+        """
+        INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, user_agent)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(endpoint) DO UPDATE SET
+            user_id = excluded.user_id,
+            p256dh = excluded.p256dh,
+            auth = excluded.auth,
+            user_agent = excluded.user_agent,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            user_id,
+            endpoint,
+            subscription["keys"]["p256dh"],
+            subscription["keys"]["auth"],
+            str(request.headers.get("User-Agent") or "")[:500],
+        ),
+    )
+    db.commit()
+    _maybe_send_backup("push_subscription_update")
+    return _no_store(jsonify({"ok": True, "subscribed": True}))
+
+
+@app.route("/api/notifications/preferences", methods=["GET", "PUT"])
+def api_notification_preferences():
+    user_id = _current_user_id()
+    row = _load_user(user_id)
+    if not row:
+        session.pop("user_id", None)
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    profile = _load_profile_for_user(row)
+    if request.method == "GET":
+        return _no_store(jsonify({
+            "ok": True,
+            "preferences": profile["notificationPreferences"],
+        }))
+
+    data = request.get_json(silent=True) or {}
+    incoming = data.get("preferences") if isinstance(data.get("preferences"), dict) else data
+    preferences = _normalise_notification_preferences(incoming)
+    profile["notificationPreferences"] = preferences
+    _save_profile(user_id, profile)
+    _maybe_send_backup("notification_preferences_update")
+    return _no_store(jsonify({"ok": True, "preferences": preferences}))
+
 @app.route("/api/profile", methods=["GET", "PUT"])
 def api_profile():
     user_id = _current_user_id()
@@ -1593,6 +1874,27 @@ def _build_backup_payload() -> dict:
     except Exception:
         users = []
 
+    push_subscriptions = []
+    try:
+        cur = db.execute(
+            "SELECT id, user_id, endpoint, p256dh, auth, user_agent, created_at, updated_at "
+            "FROM push_subscriptions ORDER BY id"
+        )
+        for row in cur.fetchall():
+            push_subscriptions.append({
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "subscription": {
+                    "endpoint": row["endpoint"],
+                    "keys": {"p256dh": row["p256dh"], "auth": row["auth"]},
+                },
+                "user_agent": row["user_agent"] or "",
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            })
+    except Exception:
+        push_subscriptions = []
+
     vacations = []
     try:
         cur = db.execute(
@@ -1649,6 +1951,7 @@ def _build_backup_payload() -> dict:
         },
         "database": {
             "users": users,
+            "push_subscriptions": push_subscriptions,
             "vacations": vacations,
             "exams_manual": exams_manual,
             "settings": settings_map,
@@ -1710,6 +2013,29 @@ def _apply_backup_payload(payload: dict) -> None:
             profile_json = json.dumps(_normalise_profile(profile))
             created_at = entry.get("created_at") or datetime.utcnow().isoformat()
             users_norm.append((user_id, username, entry.get("password_hash") or "", profile_json, created_at))
+
+    push_subscriptions_norm = []
+    push_subscriptions_in = db_section.get("push_subscriptions") or []
+    if isinstance(push_subscriptions_in, list):
+        for entry in push_subscriptions_in:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                subscription_id = int(entry.get("id"))
+                user_id = int(entry.get("user_id"))
+                subscription = _normalise_push_subscription(entry.get("subscription"))
+            except (TypeError, ValueError):
+                continue
+            push_subscriptions_norm.append((
+                subscription_id,
+                user_id,
+                subscription["endpoint"],
+                subscription["keys"]["p256dh"],
+                subscription["keys"]["auth"],
+                str(entry.get("user_agent") or "")[:500],
+                entry.get("created_at") or datetime.utcnow().isoformat(),
+                entry.get("updated_at") or datetime.utcnow().isoformat(),
+            ))
 
     vacations_norm = []
     vacations = db_section.get("vacations") or []
@@ -1817,6 +2143,10 @@ def _apply_backup_payload(payload: dict) -> None:
     db = get_db()
     try:
         db.execute("BEGIN")
+        db.execute("DELETE FROM notification_deliveries")
+        db.execute("DELETE FROM notification_snapshots")
+        db.execute("DELETE FROM notification_runtime")
+        db.execute("DELETE FROM push_subscriptions")
         db.execute("DELETE FROM users")
         db.execute("DELETE FROM vacations")
         db.execute("DELETE FROM settings")
@@ -1838,6 +2168,14 @@ def _apply_backup_payload(payload: dict) -> None:
             db.execute(
                 "INSERT INTO exams_manual (id, subject, name, date, start_time, end_time, classes_json, teachers_json, room, note, grade, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 row
+            )
+
+        for row in push_subscriptions_norm:
+            db.execute(
+                "INSERT INTO push_subscriptions "
+                "(id, user_id, endpoint, p256dh, auth, user_agent, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                row,
             )
 
         for key, value in settings_payload.items():
@@ -2006,6 +2344,639 @@ def _maybe_auto_restore() -> bool:
         return False
 
 
+def _notification_lesson(raw: dict, grade: str) -> dict:
+    return {
+        "id": str(raw.get("id") or "").strip(),
+        "grade": _normalise_grade(grade),
+        "date": str(raw.get("date") or "").strip(),
+        "start": str(raw.get("start") or "").strip(),
+        "end": str(raw.get("end") or "").strip(),
+        "subject": str(raw.get("subject") or "").strip(),
+        "subject_original": str(raw.get("subject_original") or "").strip(),
+        "teacher": str(raw.get("teacher") or "").strip(),
+        "room": str(raw.get("room") or "").strip(),
+        "status": str(raw.get("status") or "normal").strip().lower(),
+        "note": str(raw.get("note") or "").strip(),
+        "special": bool(raw.get("special")),
+    }
+
+
+def _notification_lesson_identity(lesson: dict) -> str:
+    raw_id = str(lesson.get("id") or "").strip()
+    match = re.fullmatch(r"(.+)-\d{8}-\d{1,4}", raw_id)
+    if match:
+        return match.group(1)
+    if raw_id:
+        return raw_id
+    fallback = "|".join(
+        str(lesson.get(key) or "")
+        for key in ("date", "start", "end", "subject_original", "subject")
+    )
+    return hashlib.sha256(fallback.encode("utf-8")).hexdigest()[:24]
+
+
+def _notification_event_key(grade: str, week_start: date, identity: str, lesson: dict) -> str:
+    fingerprint = json.dumps(lesson, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:20]
+    return f"timetable:{grade}:{week_start.isoformat()}:{identity}:{digest}"
+
+
+def _compare_and_store_notification_snapshot(
+    grade: str,
+    week_start: date,
+    raw_lessons: list[dict],
+    today: date,
+) -> list[dict]:
+    grade = _normalise_grade(grade)
+    if not grade:
+        return []
+    lessons = sorted(
+        (_notification_lesson(item, grade) for item in raw_lessons if isinstance(item, dict)),
+        key=lambda item: (
+            item.get("date", ""),
+            item.get("start", ""),
+            _notification_lesson_identity(item),
+        ),
+    )
+    db = get_db()
+    row = db.execute(
+        "SELECT lessons_json FROM notification_snapshots WHERE grade = ? AND week_start = ?",
+        (grade, week_start.isoformat()),
+    ).fetchone()
+    previous = None
+    if row:
+        try:
+            loaded = json.loads(row["lessons_json"])
+            previous = loaded if isinstance(loaded, list) else []
+        except (TypeError, json.JSONDecodeError):
+            previous = []
+
+    # A transient Untis response can be empty. Keep the last non-empty baseline
+    # so recovery does not look like an entire week of newly added lessons.
+    if previous and not lessons:
+        return []
+
+    db.execute(
+        """
+        INSERT INTO notification_snapshots (grade, week_start, lessons_json, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(grade, week_start) DO UPDATE SET
+            lessons_json = excluded.lessons_json,
+            updated_at = excluded.updated_at
+        """,
+        (grade, week_start.isoformat(), json.dumps(lessons, ensure_ascii=False), int(time.time())),
+    )
+    db.commit()
+    if previous is None:
+        return []
+
+    old_by_id = {_notification_lesson_identity(item): item for item in previous}
+    events: list[dict] = []
+    for current in lessons:
+        try:
+            if _parse_iso_date(current["date"]) < today:
+                continue
+        except (KeyError, ValueError):
+            continue
+        identity = _notification_lesson_identity(current)
+        old = old_by_id.get(identity)
+        if old is None:
+            if current.get("status") != "entfaellt":
+                changes = ["addition"]
+            else:
+                continue
+        else:
+            changes = []
+            if old.get("status") != "entfaellt" and current.get("status") == "entfaellt":
+                changes.append("cancellation")
+            if (old.get("date"), old.get("start"), old.get("end")) != (
+                current.get("date"), current.get("start"), current.get("end")
+            ):
+                changes.append("time")
+            if old.get("room") != current.get("room"):
+                changes.append("room")
+            if (
+                old.get("status") != current.get("status")
+                and "cancellation" not in changes
+            ) or old.get("note") != current.get("note"):
+                changes.append("other")
+        if not changes:
+            continue
+        events.append({
+            "key": _notification_event_key(grade, week_start, identity, current),
+            "grade": grade,
+            "weekStart": week_start.isoformat(),
+            "changes": changes,
+            "lesson": current,
+            "previous": old,
+        })
+    return events
+
+
+def _fetch_notification_timetable_events(now: datetime) -> list[dict]:
+    events: list[dict] = []
+    current_week = _monday_of(now.date())
+    grades = [grade for grade in available_grades() if grade in SUPPORTED_GRADES]
+    for grade in grades:
+        for week_start in (current_week, current_week + timedelta(days=7)):
+            try:
+                lessons = fetch_week(week_start, grade) or []
+                events.extend(
+                    _compare_and_store_notification_snapshot(
+                        grade,
+                        week_start,
+                        lessons,
+                        now.date(),
+                    )
+                )
+            except Exception as exc:
+                app.logger.warning(
+                    "notification timetable fetch failed for %s/%s: %s",
+                    grade,
+                    week_start,
+                    exc,
+                )
+    return events
+
+
+def _profile_selected_courses(profile: dict, grade: str) -> set[str]:
+    selected: set[str] = set()
+    for value in profile.get("courses") or []:
+        course_grade, body = _course_grade_and_body(value)
+        if course_grade == grade:
+            key = norm_key(body)
+            if key:
+                selected.add(f"{grade}:{key}")
+    return selected
+
+
+def _subject_candidates(grade: str, subject: str, course_map: dict[str, str]) -> set[str]:
+    key = norm_key(subject)
+    candidates = {f"{grade}:{key}"} if key else set()
+    mapped = str(course_map.get(key) or "").strip() if key else ""
+    mapped_key = norm_key(mapped)
+    if mapped_key:
+        candidates.add(f"{grade}:{mapped_key}")
+    return candidates
+
+
+def _lesson_matches_selected_courses(
+    event: dict,
+    selected: set[str],
+    course_map: dict[str, str],
+) -> bool:
+    if not selected:
+        return False
+    grade = event["grade"]
+    for lesson in (event.get("lesson"), event.get("previous")):
+        if not isinstance(lesson, dict):
+            continue
+        for subject in (lesson.get("subject_original"), lesson.get("subject")):
+            if selected.intersection(_subject_candidates(grade, subject, course_map)):
+                return True
+    return False
+
+
+def _notification_subject(lesson: dict, course_map: dict[str, str]) -> str:
+    raw = str(lesson.get("subject_original") or lesson.get("subject") or "Stunde").strip()
+    return str(course_map.get(norm_key(raw)) or lesson.get("subject") or raw or "Stunde").strip()
+
+
+def _format_notification_lesson_time(lesson: dict) -> str:
+    weekdays = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+    try:
+        lesson_date = _parse_iso_date(str(lesson.get("date") or ""))
+        day = f"{weekdays[lesson_date.weekday()]}, {lesson_date.strftime('%d.%m.')}"
+    except ValueError:
+        day = str(lesson.get("date") or "")
+    start = str(lesson.get("start") or "").strip()
+    return f"{day}, {start}" if start else day
+
+
+def _allowed_timetable_changes(event: dict, preferences: dict) -> list[str]:
+    preference_by_change = {
+        "cancellation": "cancellations",
+        "addition": "additions",
+        "room": "roomChanges",
+        "time": "timeChanges",
+        "other": "otherChanges",
+    }
+    return [
+        change
+        for change in event.get("changes") or []
+        if preferences.get(preference_by_change.get(change, "otherChanges"), True)
+    ]
+
+
+def _describe_timetable_event(event: dict, changes: list[str], course_map: dict[str, str]) -> str:
+    lesson = event["lesson"]
+    previous = event.get("previous") or {}
+    subject = _notification_subject(lesson, course_map)
+    when = _format_notification_lesson_time(lesson)
+    if changes == ["addition"]:
+        return f"{subject} am {when} wurde hinzugefügt."
+
+    details: list[str] = []
+    if "cancellation" in changes:
+        details.append("fällt aus")
+    if "time" in changes:
+        old_time = _format_notification_lesson_time(previous)
+        details.append(f"neue Zeit {when} (vorher {old_time})")
+    if "room" in changes:
+        old_room = str(previous.get("room") or "ohne Raum")
+        new_room = str(lesson.get("room") or "ohne Raum")
+        details.append(f"Raum {old_room} → {new_room}")
+    if "other" in changes:
+        status = str(lesson.get("status") or "geändert")
+        note = str(lesson.get("note") or "").strip()
+        details.append(note or status.capitalize())
+    return f"{subject} am {when}: " + "; ".join(details) + "."
+
+
+def _delivery_exists(user_id: int, event_key: str) -> bool:
+    return get_db().execute(
+        "SELECT 1 FROM notification_deliveries WHERE user_id = ? AND event_key = ?",
+        (user_id, event_key),
+    ).fetchone() is not None
+
+
+def _record_deliveries(user_id: int, event_keys: list[str], created_at: int) -> None:
+    db = get_db()
+    db.executemany(
+        "INSERT OR IGNORE INTO notification_deliveries (user_id, event_key, created_at) VALUES (?, ?, ?)",
+        ((user_id, key, created_at) for key in event_keys),
+    )
+    db.commit()
+
+
+def _send_timetable_event_notifications(events: list[dict], now: datetime) -> int:
+    if not events:
+        return 0
+    users = get_db().execute(
+        """
+        SELECT DISTINCT u.id, u.username, u.profile_json
+        FROM users u
+        JOIN push_subscriptions p ON p.user_id = u.id
+        ORDER BY u.id
+        """
+    ).fetchall()
+    course_maps = {
+        grade: _course_map_normalized_for_grade(grade)
+        for grade in SUPPORTED_GRADES
+    }
+    sent_users = 0
+    for row in users:
+        profile = _load_profile_for_user(row)
+        grade = _normalise_grade(profile.get("grade"))
+        preferences = profile["notificationPreferences"]
+        if not grade or not preferences["enabled"] or not preferences["timetableChanges"]:
+            continue
+        selected = _profile_selected_courses(profile, grade)
+        matching: list[tuple[dict, list[str]]] = []
+        for event in events:
+            if event["grade"] != grade or _delivery_exists(int(row["id"]), event["key"]):
+                continue
+            if not _lesson_matches_selected_courses(event, selected, course_maps[grade]):
+                continue
+            allowed = _allowed_timetable_changes(event, preferences)
+            if allowed:
+                matching.append((event, allowed))
+        if not matching:
+            continue
+
+        descriptions = [
+            _describe_timetable_event(event, changes, course_maps[grade])
+            for event, changes in matching
+        ]
+        body = descriptions[0]
+        if len(descriptions) > 1:
+            body = f"{len(descriptions)} Änderungen. {descriptions[0]}"
+        aggregate = "|".join(event["key"] for event, _ in matching)
+        result = _send_push_to_user(int(row["id"]), {
+            "title": f"Stundenplanänderung {grade}",
+            "body": body[:240],
+            "url": "/",
+            "tag": "timetable-" + hashlib.sha256(aggregate.encode("utf-8")).hexdigest()[:20],
+        }, ttl=3600)
+        if result["sent"] > 0:
+            _record_deliveries(int(row["id"]), [event["key"] for event, _ in matching], int(now.timestamp()))
+            sent_users += 1
+    return sent_users
+
+
+def _normalise_remote_exam_for_notification(rec: dict, grade: str, subjects: dict) -> dict | None:
+    if not isinstance(rec, dict):
+        return None
+    subject_id = rec.get("subjectId") or rec.get("subject")
+    subject = rec.get("subjectName") or rec.get("subject") or subjects.get(subject_id, "")
+    if not isinstance(subject, str):
+        subject = subjects.get(subject_id, "")
+    exam_date = _date_int_to_iso(rec.get("examDate") or rec.get("date"))
+    if not subject or not exam_date:
+        return None
+    return {
+        "id": str(rec.get("id") or rec.get("examId") or ""),
+        "grade": grade,
+        "date": exam_date,
+        "subject": str(subject).strip(),
+        "name": str(rec.get("name") or rec.get("title") or subject).strip(),
+        "start": _normalise_hm(rec.get("start") or rec.get("startTime")),
+        "source": "untis",
+    }
+
+
+def _remote_exam_notification_sources(grade: str, today: date) -> list[dict]:
+    cache_key = f"exam_cache:{grade}"
+    row = get_db().execute(
+        "SELECT value FROM notification_runtime WHERE key = ?",
+        (cache_key,),
+    ).fetchone()
+    cached: dict = {}
+    if row:
+        try:
+            cached = json.loads(row["value"])
+        except (TypeError, json.JSONDecodeError):
+            cached = {}
+    if int(cached.get("expires", 0) or 0) > int(time.time()) and isinstance(cached.get("exams"), list):
+        return cached["exams"]
+
+    try:
+        raw_exams = fetch_exams(today, today + timedelta(days=14), 0, grade) or []
+        subjects = fetch_subject_map(grade)
+        exams = [
+            exam
+            for exam in (
+                _normalise_remote_exam_for_notification(rec, grade, subjects)
+                for rec in raw_exams
+            )
+            if exam
+        ]
+        value = json.dumps({"expires": int(time.time()) + 6 * 3600, "exams": exams}, ensure_ascii=False)
+        get_db().execute(
+            "INSERT INTO notification_runtime (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (cache_key, value),
+        )
+        get_db().commit()
+        return exams
+    except Exception as exc:
+        app.logger.warning("notification exam fetch failed for %s: %s", grade, exc)
+        exams = cached.get("exams", []) if isinstance(cached.get("exams"), list) else []
+        get_db().execute(
+            "INSERT INTO notification_runtime (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (cache_key, json.dumps({"expires": int(time.time()) + 30 * 60, "exams": exams}, ensure_ascii=False)),
+        )
+        get_db().commit()
+        return exams
+
+
+def _send_exam_reminders(now: datetime) -> int:
+    users = get_db().execute(
+        """
+        SELECT DISTINCT u.id, u.username, u.profile_json
+        FROM users u
+        JOIN push_subscriptions p ON p.user_id = u.id
+        ORDER BY u.id
+        """
+    ).fetchall()
+    grades = {
+        _normalise_grade(_load_profile_for_user(row).get("grade"))
+        for row in users
+    }
+    grades.discard("")
+    remote_by_grade = {
+        grade: _remote_exam_notification_sources(grade, now.date())
+        for grade in grades
+    }
+    manual_exams = _load_manual_exams(now.date(), now.date() + timedelta(days=14))
+    course_maps = {
+        grade: _course_map_normalized_for_grade(grade)
+        for grade in grades
+    }
+    sent = 0
+    for row in users:
+        user_id = int(row["id"])
+        profile = _load_profile_for_user(row)
+        grade = _normalise_grade(profile.get("grade"))
+        preferences = profile["notificationPreferences"]
+        if not grade or not preferences["enabled"] or not preferences["examReminders"]:
+            continue
+        selected = _profile_selected_courses(profile, grade)
+        reminder_days = preferences["examReminderDays"]
+        target_date = now.date() + timedelta(days=reminder_days)
+        candidates: list[dict] = []
+        for exam in profile.get("klausuren") or []:
+            candidates.append({**exam, "grade": grade, "source": "personal"})
+        candidates.extend(
+            exam for exam in manual_exams
+            if _normalise_grade(exam.get("grade")) == grade
+        )
+        candidates.extend(remote_by_grade.get(grade, []))
+
+        unique: dict[str, dict] = {}
+        for exam in candidates:
+            if str(exam.get("date") or "") != target_date.isoformat():
+                continue
+            subject = str(exam.get("subject") or "").strip()
+            if exam.get("source") != "personal" and not selected.intersection(
+                _subject_candidates(grade, subject, course_maps[grade])
+            ):
+                continue
+            identity = "|".join((grade, target_date.isoformat(), norm_key(subject), norm_key(exam.get("name"))))
+            unique[identity] = exam
+
+        for identity, exam in unique.items():
+            digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+            event_key = f"exam:{digest}:days-{reminder_days}"
+            if _delivery_exists(user_id, event_key):
+                continue
+            subject = str(exam.get("subject") or "Klausur").strip()
+            name = str(exam.get("name") or subject).strip()
+            when = "heute" if reminder_days == 0 else (
+                "morgen" if reminder_days == 1 else f"in {reminder_days} Tagen"
+            )
+            result = _send_push_to_user(user_id, {
+                "title": f"Klausur {when}",
+                "body": f"{name} ({subject}) am {target_date.strftime('%d.%m.%Y')}.",
+                "url": "/",
+                "tag": event_key,
+            }, ttl=12 * 3600)
+            if result["sent"] > 0:
+                _record_deliveries(user_id, [event_key], int(now.timestamp()))
+                sent += 1
+    return sent
+
+
+def _snapshot_lessons_for_date(grade: str, target_date: date) -> list[dict]:
+    week_start = _monday_of(target_date)
+    row = get_db().execute(
+        "SELECT lessons_json FROM notification_snapshots WHERE grade = ? AND week_start = ?",
+        (grade, week_start.isoformat()),
+    ).fetchone()
+    if not row:
+        return []
+    try:
+        lessons = json.loads(row["lessons_json"])
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return [
+        lesson for lesson in lessons
+        if lesson.get("date") == target_date.isoformat() and lesson.get("status") != "entfaellt"
+    ]
+
+
+def _send_daily_summaries(now: datetime) -> int:
+    users = get_db().execute(
+        """
+        SELECT DISTINCT u.id, u.username, u.profile_json
+        FROM users u
+        JOIN push_subscriptions p ON p.user_id = u.id
+        ORDER BY u.id
+        """
+    ).fetchall()
+    target_date = now.date() + timedelta(days=1)
+    sent = 0
+    course_maps: dict[str, dict[str, str]] = {}
+    for row in users:
+        user_id = int(row["id"])
+        profile = _load_profile_for_user(row)
+        grade = _normalise_grade(profile.get("grade"))
+        preferences = profile["notificationPreferences"]
+        if (
+            not grade
+            or not preferences["enabled"]
+            or not preferences["dailySummary"]
+            or now.strftime("%H:%M") < preferences["dailySummaryTime"]
+        ):
+            continue
+        event_key = f"daily:{target_date.isoformat()}"
+        if _delivery_exists(user_id, event_key):
+            continue
+        selected = _profile_selected_courses(profile, grade)
+        if not selected:
+            continue
+        course_map = course_maps.setdefault(grade, _course_map_normalized_for_grade(grade))
+        lessons = []
+        for lesson in _snapshot_lessons_for_date(grade, target_date):
+            event = {"grade": grade, "lesson": lesson, "previous": None}
+            if _lesson_matches_selected_courses(event, selected, course_map):
+                lessons.append(lesson)
+        lessons.sort(key=lambda lesson: lesson.get("start") or "")
+        if lessons:
+            first = lessons[0]
+            body = (
+                f"{len(lessons)} Stunden. Erste Stunde: "
+                f"{_notification_subject(first, course_map)} um {first.get('start') or '--:--'}."
+            )
+        else:
+            body = "Keine ausgewählten Kurse im Stundenplan."
+        result = _send_push_to_user(user_id, {
+            "title": f"Morgen, {target_date.strftime('%d.%m.')}",
+            "body": body,
+            "url": "/",
+            "tag": event_key,
+        }, ttl=12 * 3600)
+        if result["sent"] > 0:
+            _record_deliveries(user_id, [event_key], int(now.timestamp()))
+            sent += 1
+    return sent
+
+
+def _run_notification_cycle(now: datetime | None = None) -> dict:
+    current = now or datetime.now(APP_TZ)
+    events = _fetch_notification_timetable_events(current)
+    result = {
+        "events": len(events),
+        "timetableUsers": _send_timetable_event_notifications(events, current),
+        "examReminders": _send_exam_reminders(current),
+        "dailySummaries": _send_daily_summaries(current),
+    }
+    cutoff = int(current.timestamp()) - 90 * 24 * 3600
+    db = get_db()
+    db.execute("DELETE FROM notification_deliveries WHERE created_at < ?", (cutoff,))
+    db.execute(
+        "DELETE FROM notification_snapshots WHERE updated_at < ?",
+        (int(current.timestamp()) - 28 * 24 * 3600,),
+    )
+    db.execute(
+        "INSERT INTO notification_runtime (key, value) VALUES ('last_result', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (json.dumps({**result, "finishedAt": current.isoformat()}, ensure_ascii=False),),
+    )
+    db.commit()
+    return result
+
+
+def _acquire_notification_monitor_lease(now_ts: int) -> bool:
+    db = get_db()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT value FROM notification_runtime WHERE key = 'monitor_lease_until'"
+        ).fetchone()
+        lease_until = int(row["value"]) if row else 0
+        if lease_until > now_ts:
+            db.rollback()
+            return False
+        db.execute(
+            "INSERT INTO notification_runtime (key, value) VALUES ('monitor_lease_until', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(now_ts + max(600, NOTIFICATION_CHECK_INTERVAL_SECONDS * 3)),),
+        )
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _release_notification_monitor_lease() -> None:
+    db = get_db()
+    db.execute(
+        "INSERT INTO notification_runtime (key, value) VALUES ('monitor_lease_until', '0') "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    )
+    db.commit()
+
+
+_notification_worker_started = False
+
+
+def _start_notification_worker() -> None:
+    global _notification_worker_started
+    if _notification_worker_started or not NOTIFICATION_MONITOR_ENABLED:
+        return
+    if not _push_configured():
+        app.logger.warning("notification monitor is enabled but Web Push is not configured")
+        return
+    _notification_worker_started = True
+
+    def _worker():
+        time.sleep(3)
+        while True:
+            acquired = False
+            try:
+                with app.app_context():
+                    now_ts = int(time.time())
+                    acquired = _acquire_notification_monitor_lease(now_ts)
+                    if acquired:
+                        result = _run_notification_cycle(datetime.now(APP_TZ))
+                        app.logger.info("notification monitor completed: %s", result)
+            except Exception:
+                app.logger.exception("notification monitor failed")
+            finally:
+                if acquired:
+                    try:
+                        with app.app_context():
+                            _release_notification_monitor_lease()
+                    except Exception:
+                        app.logger.exception("notification monitor lease release failed")
+            time.sleep(NOTIFICATION_CHECK_INTERVAL_SECONDS)
+
+    threading.Thread(target=_worker, name="notification-monitor", daemon=True).start()
+
+
 _auto_backup_started = False
 
 
@@ -2044,6 +3015,7 @@ try:
         if _maybe_auto_restore():
             _maybe_send_backup("startup")
             _start_auto_backup_worker()
+            _start_notification_worker()
         else:
             app.logger.error(
                 "startup backup disabled because the user database could not "
@@ -2114,7 +3086,13 @@ def admin_state():
     user_rows = []
     try:
         cur = get_db().execute(
-            "SELECT id, username FROM users ORDER BY LOWER(username)"
+            """
+            SELECT u.id, u.username, COUNT(p.id) AS push_subscription_count
+            FROM users u
+            LEFT JOIN push_subscriptions p ON p.user_id = u.id
+            GROUP BY u.id, u.username
+            ORDER BY LOWER(u.username)
+            """
         )
         rows = cur.fetchall()
         user_rows = []
@@ -2124,6 +3102,7 @@ def admin_state():
             user_rows.append({
                 "id": uid,
                 "username": username,
+                "push_subscription_count": int(row["push_subscription_count"] or 0),
             })
     except Exception:
         user_rows = []
@@ -2160,6 +3139,18 @@ def admin_state():
         for key, default in SETTINGS_DEFAULTS.items()
         if key != "imageBannerData"
     }
+    push_subscription_count = int(
+        get_db().execute("SELECT COUNT(*) FROM push_subscriptions").fetchone()[0]
+    )
+    last_notification_result = None
+    try:
+        result_row = get_db().execute(
+            "SELECT value FROM notification_runtime WHERE key = 'last_result'"
+        ).fetchone()
+        if result_row:
+            last_notification_result = json.loads(result_row["value"])
+    except (TypeError, json.JSONDecodeError):
+        last_notification_result = None
 
     return _no_store(jsonify({
         "ok": True,
@@ -2179,6 +3170,13 @@ def admin_state():
         },
         "unmapped_rooms": unmapped_rm,
         "users": user_rows,
+        "push": {
+            "configured": _push_configured(),
+            "subscription_count": push_subscription_count,
+            "monitor_enabled": NOTIFICATION_MONITOR_ENABLED,
+            "check_interval_seconds": NOTIFICATION_CHECK_INTERVAL_SECONDS,
+            "last_result": last_notification_result,
+        },
         "vacations": vacations,
         "settings": settings_payload,
         "image_banner": _image_banner_payload(include_disabled=True),
@@ -2254,6 +3252,68 @@ def admin_save():
         "saved_rooms": len(new_rooms),
         "saved_settings": len(sanitized_settings),
     }))
+
+
+@app.route("/api/admin/push/test", methods=["POST"])
+def admin_push_test():
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    if not _push_configured():
+        return jsonify({"ok": False, "error": "push_not_configured"}), 503
+
+    data = request.get_json(silent=True) or {}
+    title = str(data.get("title") or "Test-Benachrichtigung").strip()[:80]
+    body = str(data.get("body") or "Push-Benachrichtigungen funktionieren.").strip()[:240]
+    target_raw = data.get("user_id")
+    target_user_id = None
+    if target_raw not in (None, "", "all"):
+        try:
+            target_user_id = int(target_raw)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "push_target_invalid"}), 400
+    if not title or not body:
+        return jsonify({"ok": False, "error": "push_message_invalid"}), 400
+
+    notification_url = str(data.get("url") or "/").strip()
+    if not notification_url.startswith("/") or notification_url.startswith("//"):
+        notification_url = "/"
+    notification = {
+        "title": title,
+        "body": body,
+        "url": notification_url,
+        "tag": f"admin-test-{int(time.time())}",
+    }
+
+    sql = (
+        "SELECT id, user_id, endpoint, p256dh, auth FROM push_subscriptions"
+        + (" WHERE user_id = ?" if target_user_id is not None else "")
+        + " ORDER BY id"
+    )
+    params = (target_user_id,) if target_user_id is not None else ()
+    rows = get_db().execute(sql, params).fetchall()
+    if not rows:
+        return jsonify({"ok": False, "error": "push_no_subscriptions"}), 409
+
+    result = _send_push_rows(rows, notification, ttl=300)
+    return _no_store(jsonify({"ok": result["failed"] == 0, **result}))
+
+
+@app.route("/api/admin/push/run-monitor", methods=["POST"])
+def admin_run_notification_monitor():
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    if not _push_configured():
+        return jsonify({"ok": False, "error": "push_not_configured"}), 503
+    if not _acquire_notification_monitor_lease(int(time.time())):
+        return jsonify({"ok": False, "error": "notification_monitor_busy"}), 409
+    try:
+        result = _run_notification_cycle(datetime.now(APP_TZ))
+        return _no_store(jsonify({"ok": True, **result}))
+    except Exception:
+        app.logger.exception("manual notification monitor run failed")
+        return jsonify({"ok": False, "error": "notification_monitor_failed"}), 500
+    finally:
+        _release_notification_monitor_lease()
 
 
 @app.route("/api/admin/banner-image", methods=["POST", "DELETE"])
@@ -2347,6 +3407,8 @@ def admin_delete_user(user_id: int):
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     db = get_db()
+    db.execute("DELETE FROM push_subscriptions WHERE user_id = ?", (user_id,))
+    db.execute("DELETE FROM notification_deliveries WHERE user_id = ?", (user_id,))
     cur = db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     db.commit()
     if cur.rowcount == 0:

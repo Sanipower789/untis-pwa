@@ -66,7 +66,14 @@
 
 
 
-    .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;flex:1 1 420px;min-width:320px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;flex:1 1 420px;min-width:320px}
+    .collapsible-card>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}
+    .collapsible-card{align-self:flex-start}
+    .collapsible-card>summary::-webkit-details-marker{display:none}
+    .collapsible-card>summary::after{content:"▾";color:var(--muted);font-size:18px;transition:transform .15s ease}
+    .collapsible-card[open]>summary::after{transform:rotate(180deg)}
+    .collapsible-card>summary h2{margin:.2rem 0}
+    .collapsible-card>.collapsible-content{padding-top:8px}
 
 
 
@@ -216,6 +223,22 @@
       .card{min-width:0;}
       .banner-controls{grid-template-columns:1fr;}
     }
+    .push-form{display:grid;gap:10px;margin-top:12px;}
+    .push-form label{display:grid;gap:5px;font-size:13px;color:var(--muted);}
+    .push-form input,
+    .push-form select,
+    .push-form textarea{
+      width:100%;
+      background:#1d1e23;
+      border:1px solid #3a3f4a;
+      color:#fff;
+      border-radius:8px;
+      padding:8px;
+    }
+    .push-form textarea{min-height:84px;resize:vertical;}
+    .push-status{min-height:20px;margin-top:10px;}
+    .push-status.error{color:#ff8585;}
+    .push-status.ok{color:#7bdba6;}
 </style>
 
 
@@ -541,11 +564,13 @@
 
 
 
-    <div class="card" id="users">
+    <details class="card collapsible-card" id="users">
 
 
 
-      <h2>Benutzerkonten</h2>
+      <summary><h2>Benutzerkonten</h2></summary>
+
+      <div class="collapsible-content">
 
 
 
@@ -593,19 +618,13 @@
 
 
 
-      </table>
-
-
-
-    </div>
-
-
-
-
-
-
-
-    <div class="card" id="vacations">
+      </table>
+
+      </div>
+
+    </details>
+
+    <div class="card" id="vacations">
 
 
 
@@ -1053,7 +1072,31 @@
 
 
 
-    <div class="card" id="backup">
+    <div class="card" id="push-test">
+      <h2>Test-Benachrichtigung</h2>
+      <div class="bar">
+        <span class="pill" id="push-config-status">Push wird geprüft</span>
+        <span class="pill" id="push-subscription-count">0 Geräte</span>
+        <span class="pill" id="push-monitor-status">Monitor wird geprüft</span>
+      </div>
+      <p id="push-monitor-last-run" class="muted">Noch keine automatische Prüfung.</p>
+      <div class="foot"><button id="push-monitor-run" type="button">Jetzt prüfen</button></div>
+      <form id="push-test-form" class="push-form">
+        <label>Empfänger
+          <select id="push-target"></select>
+        </label>
+        <label>Titel
+          <input id="push-title" type="text" maxlength="80" value="Stundenplan-Test" required>
+        </label>
+        <label>Nachricht
+          <textarea id="push-body" maxlength="240" required>Diese Test-Benachrichtigung wurde über die Admin-Seite gesendet.</textarea>
+        </label>
+        <div class="foot"><button id="push-send" type="submit">Test senden</button></div>
+      </form>
+      <div id="push-test-status" class="muted push-status" role="status" aria-live="polite"></div>
+    </div>
+
+    <div class="card" id="backup">
 
 
 
@@ -1147,7 +1190,8 @@ const state = {
 
   settings: { timeColumnWidth: "60" },
 
-  image_banner: null
+  image_banner: null,
+  push: { configured: false, subscription_count: 0 }
 
 
 
@@ -1386,6 +1430,7 @@ async function loadState(){
   state.settings = j.settings || state.settings || { timeColumnWidth: "60" };
 
   state.image_banner = j.image_banner || null;
+  state.push = j.push || { configured: false, subscription_count: 0 };
 
 
 
@@ -1475,19 +1520,51 @@ async function loadState(){
 
   renderSettings();
 
+  renderPushAdmin();
+
   syncBannerAdmin(state.image_banner);
 
 
 
-}
-
-
-
-
-
-
-
-function renderTables(){
+}
+
+function renderPushAdmin(){
+  const meta = state.push || {};
+  const configured = Boolean(meta.configured);
+  const count = Number(meta.subscription_count) || 0;
+  const configStatus = document.getElementById("push-config-status");
+  const countStatus = document.getElementById("push-subscription-count");
+  const monitorStatus = document.getElementById("push-monitor-status");
+  const monitorLastRun = document.getElementById("push-monitor-last-run");
+  const monitorRun = document.getElementById("push-monitor-run");
+  const target = document.getElementById("push-target");
+  const send = document.getElementById("push-send");
+  if (configStatus) configStatus.textContent = configured ? "Push bereit" : "Push nicht eingerichtet";
+  if (countStatus) countStatus.textContent = `${count} ${count === 1 ? "Gerät" : "Geräte"}`;
+  if (monitorStatus) {
+    const minutes = Math.max(1, Math.round((Number(meta.check_interval_seconds) || 300) / 60));
+    monitorStatus.textContent = meta.monitor_enabled ? `Monitor aktiv (${minutes} Min.)` : "Monitor deaktiviert";
+  }
+  if (monitorLastRun) {
+    const last = meta.last_result;
+    monitorLastRun.textContent = last?.finishedAt
+      ? `Letzte Prüfung: ${new Date(last.finishedAt).toLocaleString("de-DE")} · ${Number(last.events) || 0} Änderungen`
+      : "Noch keine automatische Prüfung.";
+  }
+  if (monitorRun) monitorRun.disabled = !configured;
+  if (target) {
+    const subscribedUsers = state.users.filter(user => Number(user.push_subscription_count) > 0);
+    const options = [`<option value="all">Alle Testgeräte (${count})</option>`];
+    subscribedUsers.forEach(user => {
+      const devices = Number(user.push_subscription_count) || 0;
+      options.push(`<option value="${Number(user.id)}">${escapeHtml(user.username)} (${devices})</option>`);
+    });
+    target.innerHTML = options.join("");
+  }
+  if (send) send.disabled = !configured || count < 1;
+}
+
+function renderTables(){
 
 
 
@@ -2935,7 +3012,80 @@ if (saveSettingsBtn) {
 
 
 
-const backupFileInput = document.getElementById("backup-file");
+const pushTestForm = document.getElementById("push-test-form");
+const pushTestStatus = document.getElementById("push-test-status");
+const setPushTestStatus = (message, tone = "") => {
+  if (!pushTestStatus) return;
+  pushTestStatus.textContent = message || "";
+  pushTestStatus.classList.toggle("ok", tone === "ok");
+  pushTestStatus.classList.toggle("error", tone === "error");
+};
+
+if (pushTestForm) pushTestForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  const sendButton = document.getElementById("push-send");
+  const target = document.getElementById("push-target");
+  const title = document.getElementById("push-title");
+  const body = document.getElementById("push-body");
+  if (sendButton) sendButton.disabled = true;
+  setPushTestStatus("Test wird gesendet.");
+  try {
+    const response = await fetch("/api/admin/push/test", {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({
+        user_id: target ? target.value : "all",
+        title: title ? title.value.trim() : "",
+        body: body ? body.value.trim() : "",
+        url: "/",
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const messages = {
+        push_not_configured: "Push ist auf diesem Server nicht eingerichtet.",
+        push_no_subscriptions: "Es ist noch kein Testgerät angemeldet.",
+        push_message_invalid: "Titel und Nachricht dürfen nicht leer sein.",
+      };
+      throw new Error(messages[result.error] || result.error || "Senden fehlgeschlagen.");
+    }
+    const message = `${result.sent || 0} gesendet, ${result.failed || 0} fehlgeschlagen`;
+    setPushTestStatus(message, result.failed ? "error" : "ok");
+    await loadState();
+  } catch (error) {
+    setPushTestStatus(error.message || "Senden fehlgeschlagen.", "error");
+  } finally {
+    if (sendButton) sendButton.disabled = false;
+    renderPushAdmin();
+  }
+});
+
+const pushMonitorRun = document.getElementById("push-monitor-run");
+if (pushMonitorRun) pushMonitorRun.addEventListener("click", async () => {
+  pushMonitorRun.disabled = true;
+  setPushTestStatus("Stundenpläne und Klausuren werden geprüft.");
+  try {
+    const response = await fetch("/api/admin/push/run-monitor", { method: "POST" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      const message = result.error === "notification_monitor_busy"
+        ? "Der Monitor läuft bereits."
+        : (result.error || "Prüfung fehlgeschlagen.");
+      throw new Error(message);
+    }
+    setPushTestStatus(
+      `${result.events || 0} Änderungen erkannt, ${result.examReminders || 0} Klausurerinnerungen gesendet.`,
+      "ok",
+    );
+    await loadState();
+  } catch (error) {
+    setPushTestStatus(error.message || "Prüfung fehlgeschlagen.", "error");
+  } finally {
+    renderPushAdmin();
+  }
+});
+
+const backupFileInput = document.getElementById("backup-file");
 
 
 

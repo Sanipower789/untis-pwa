@@ -3,6 +3,8 @@ __pycache__/
 .env
 *.zip
 .vscode/
+.venv/
+tools/
 user_data.db
 last_backup.json
 last_good_timetable.json
