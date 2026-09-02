@@ -11,6 +11,18 @@
 </head>
 <body>
 
+  {% if image_banner %}
+  <div id="page-image-banner" class="page-image-banner">
+    <img
+      src="{{ image_banner.imageUrl }}"
+      alt="{{ image_banner.alt }}"
+      width="{{ image_banner.width }}"
+      height="{{ image_banner.height }}"
+      fetchpriority="high"
+    >
+  </div>
+  {% endif %}
+
   <!-- Install-Overlay: blockt die App bis Install -->
   <div id="install-gate" class="gate">
     <div class="gate-card">

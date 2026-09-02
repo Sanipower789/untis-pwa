@@ -1,4 +1,4 @@
-import os, json, time, re, sqlite3, shutil, requests, threading
+import os, json, time, re, sqlite3, shutil, requests, threading, base64, binascii
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 try:
@@ -113,9 +113,17 @@ SETTINGS_DEFAULTS  = {
     "updateBannerText": "",
     "updateBannerEnabled": "0",
     "updateBannerUpdatedAt": "0",
+    "imageBannerData": "",
+    "imageBannerEnabled": "0",
+    "imageBannerAlt": "Schulbanner",
+    "imageBannerUpdatedAt": "0",
 }
 BACKUP_VERSION     = 4
 SUPPORTED_GRADES   = ("EF", "Q1", "Q2")
+IMAGE_BANNER_WIDTH = 1600
+IMAGE_BANNER_HEIGHT = 400
+IMAGE_BANNER_MAX_BYTES = 1536 * 1024
+IMAGE_BANNER_MAX_REQUEST_BYTES = 3 * 1024 * 1024
 
 if not ADMIN_TOKEN:
     raise RuntimeError("ADMIN_TOKEN environment variable is required and must not be empty.")
@@ -461,6 +469,81 @@ def _update_banner_payload() -> dict | None:
     return {"message": message, "enabled": True, "updatedAt": updated_at, "version": version}
 
 
+def _image_banner_payload(include_disabled: bool = False) -> dict | None:
+    image_data = str(_get_setting("imageBannerData", "") or "").strip()
+    if not image_data:
+        return None
+    enabled = _setting_as_bool(_get_setting("imageBannerEnabled", "0"))
+    if not enabled and not include_disabled:
+        return None
+    updated_raw = _get_setting("imageBannerUpdatedAt", "0")
+    try:
+        updated_at = int(updated_raw)
+    except (TypeError, ValueError):
+        updated_at = 0
+    alt = str(_get_setting("imageBannerAlt", "Schulbanner") or "").strip()
+    version = str(updated_at or int(time.time()))
+    return {
+        "enabled": enabled,
+        "alt": alt,
+        "updatedAt": updated_at,
+        "version": version,
+        "width": IMAGE_BANNER_WIDTH,
+        "height": IMAGE_BANNER_HEIGHT,
+        "imageUrl": f"/api/banner-image?v={version}",
+    }
+
+
+def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
+    """Read JPEG dimensions without decoding the full image."""
+    if len(data) < 4 or not data.startswith(b"\xff\xd8"):
+        return None
+    offset = 2
+    sof_markers = {
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+        0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+    }
+    while offset + 4 <= len(data):
+        if data[offset] != 0xFF:
+            offset += 1
+            continue
+        while offset < len(data) and data[offset] == 0xFF:
+            offset += 1
+        if offset >= len(data):
+            break
+        marker = data[offset]
+        offset += 1
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            continue
+        if offset + 2 > len(data):
+            break
+        segment_length = int.from_bytes(data[offset:offset + 2], "big")
+        if segment_length < 2 or offset + segment_length > len(data):
+            break
+        if marker in sof_markers and segment_length >= 7:
+            height = int.from_bytes(data[offset + 3:offset + 5], "big")
+            width = int.from_bytes(data[offset + 5:offset + 7], "big")
+            return width, height
+        offset += segment_length
+    return None
+
+
+def _decode_banner_image(data_url: str) -> bytes:
+    prefix = "data:image/jpeg;base64,"
+    raw = str(data_url or "").strip()
+    if not raw.startswith(prefix):
+        raise ValueError("banner_image_must_be_jpeg")
+    try:
+        image_bytes = base64.b64decode(raw[len(prefix):], validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("banner_image_invalid") from exc
+    if not image_bytes or len(image_bytes) > IMAGE_BANNER_MAX_BYTES:
+        raise ValueError("banner_image_too_large")
+    if _jpeg_dimensions(image_bytes) != (IMAGE_BANNER_WIDTH, IMAGE_BANNER_HEIGHT):
+        raise ValueError("banner_image_wrong_dimensions")
+    return image_bytes
+
+
 def _set_settings(values):
     if not values:
         return
@@ -475,9 +558,9 @@ def _set_settings(values):
                 numeric = int(SETTINGS_DEFAULTS["timeColumnWidth"])
             numeric = max(40, min(120, numeric))
             value = str(numeric)
-        if key == "updateBannerEnabled":
+        if key in ("updateBannerEnabled", "imageBannerEnabled"):
             value = "1" if _setting_as_bool(value) else "0"
-        if key == "updateBannerUpdatedAt":
+        if key in ("updateBannerUpdatedAt", "imageBannerUpdatedAt"):
             try:
                 value = str(int(value))
             except Exception:
@@ -932,11 +1015,16 @@ def _load_manual_exams(start: date, end: date) -> list[dict]:
 # ---------------- Routes ----------------
 @app.after_request
 def add_no_cache(resp):
+    if request.endpoint == "banner_image":
+        return resp
     return _no_store(resp)
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        image_banner=_image_banner_payload(),
+    )
 
 @app.route("/sw.js")
 def service_worker():
@@ -993,6 +1081,22 @@ def api_health():
 def api_update_banner():
     payload = _update_banner_payload()
     return _no_store(jsonify({"ok": True, "updateBanner": payload}))
+
+
+@app.route("/api/banner-image")
+def banner_image():
+    data_url = str(_get_setting("imageBannerData", "") or "").strip()
+    if not data_url:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    try:
+        image_bytes = _decode_banner_image(data_url)
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid_banner_image"}), 404
+    response = make_response(image_bytes)
+    response.headers["Content-Type"] = "image/jpeg"
+    response.headers["Content-Length"] = str(len(image_bytes))
+    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
 
 @app.route("/api/timetable")
 def api_timetable():
@@ -1945,7 +2049,11 @@ def admin_state():
     except Exception:
         exams_manual = []
 
-    settings_payload = {key: _get_setting(key, default) for key, default in SETTINGS_DEFAULTS.items()}
+    settings_payload = {
+        key: _get_setting(key, default)
+        for key, default in SETTINGS_DEFAULTS.items()
+        if key != "imageBannerData"
+    }
 
     return _no_store(jsonify({
         "ok": True,
@@ -1967,6 +2075,7 @@ def admin_state():
         "users": user_rows,
         "vacations": vacations,
         "settings": settings_payload,
+        "image_banner": _image_banner_payload(include_disabled=True),
         "exams_manual": exams_manual,
     }))
 
@@ -2038,6 +2147,49 @@ def admin_save():
         "saved_courses": saved_grade_courses,
         "saved_rooms": len(new_rooms),
         "saved_settings": len(sanitized_settings),
+    }))
+
+
+@app.route("/api/admin/banner-image", methods=["POST", "DELETE"])
+def admin_banner_image():
+    if not _require_admin():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    if request.method == "DELETE":
+        _set_settings({
+            "imageBannerData": "",
+            "imageBannerEnabled": "0",
+            "imageBannerUpdatedAt": str(int(time.time() * 1000)),
+        })
+        _maybe_send_backup("admin_banner_delete")
+        return _no_store(jsonify({"ok": True, "image_banner": None}))
+
+    if request.content_length and request.content_length > IMAGE_BANNER_MAX_REQUEST_BYTES:
+        return jsonify({"ok": False, "error": "banner_image_too_large"}), 413
+    payload = request.get_json(silent=True) or {}
+    current_data = str(_get_setting("imageBannerData", "") or "").strip()
+    incoming_data = payload.get("imageData")
+    if incoming_data is not None:
+        try:
+            _decode_banner_image(incoming_data)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        current_data = str(incoming_data).strip()
+    if not current_data:
+        return jsonify({"ok": False, "error": "banner_image_required"}), 400
+
+    alt = str(payload.get("alt") or "Schulbanner").strip()[:180]
+    enabled = _setting_as_bool(payload.get("enabled", True))
+    _set_settings({
+        "imageBannerData": current_data,
+        "imageBannerEnabled": "1" if enabled else "0",
+        "imageBannerAlt": alt,
+        "imageBannerUpdatedAt": str(int(time.time() * 1000)),
+    })
+    _maybe_send_backup("admin_banner_save")
+    return _no_store(jsonify({
+        "ok": True,
+        "image_banner": _image_banner_payload(include_disabled=True),
     }))
 
 @app.route("/api/admin/vacations", methods=["GET", "POST"])

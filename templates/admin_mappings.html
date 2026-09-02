@@ -182,7 +182,41 @@
 
 
 
-</style>
+    .banner-current,
+    .banner-crop-stage{
+      width:100%;
+      max-width:800px;
+      aspect-ratio:4 / 1;
+      overflow:hidden;
+      background:#0d0e12;
+      border:1px solid #343945;
+      border-radius:8px;
+    }
+    .banner-current img,
+    .banner-crop-stage canvas{display:block;width:100%;height:100%;object-fit:cover;}
+    .banner-current img[hidden]{display:none;}
+    .banner-current.empty{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;}
+    .banner-crop-stage{position:relative;cursor:grab;touch-action:none;user-select:none;}
+    .banner-crop-stage.dragging{cursor:grabbing;}
+    .banner-crop-stage::after{
+      content:"";
+      position:absolute;
+      inset:0;
+      pointer-events:none;
+      border:1px solid rgba(255,255,255,.35);
+      box-shadow:inset 0 0 0 1px rgba(0,0,0,.4);
+    }
+    .banner-controls{display:grid;grid-template-columns:minmax(160px,1fr) auto;gap:10px;align-items:end;margin-top:12px;}
+    .banner-controls input[type=range]{width:100%;}
+    .banner-file-input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;}
+    .banner-file-label{display:inline-flex;align-items:center;background:var(--btn);color:#fff;font-weight:700;border-radius:8px;padding:8px 12px;cursor:pointer;}
+    .banner-alt{width:100%;background:#1d1e23;border:1px solid #3a3f4a;color:#fff;border-radius:8px;padding:8px;}
+    .banner-status{min-height:20px;margin-top:8px;}
+    @media(max-width:640px){
+      .card{min-width:0;}
+      .banner-controls{grid-template-columns:1fr;}
+    }
+</style>
 
 
 
@@ -755,7 +789,47 @@
 
 
 
-    <div class="card" id="exams">
+    <div class="card" id="image-banner-settings">
+      <h2>Bildbanner</h2>
+      <p class="muted small">Format: 1600 × 400 px. Der Ausschnitt bleibt auf Desktop, Tablet und Smartphone gleich.</p>
+
+      <div id="banner-current" class="banner-current empty">
+        <span id="banner-current-empty">Noch kein Banner gespeichert</span>
+        <img id="banner-current-image" alt="Aktuelles Banner" hidden>
+      </div>
+
+      <div class="bar">
+        <label for="banner-file" class="banner-file-label">Bild auswählen</label>
+        <input id="banner-file" class="banner-file-input" type="file" accept="image/jpeg,image/png,image/webp">
+        <span id="banner-file-name" class="muted small"></span>
+      </div>
+
+      <div id="banner-crop-editor" hidden>
+        <p class="muted small">Bild ziehen, um den Ausschnitt zu verschieben.</p>
+        <div id="banner-crop-stage" class="banner-crop-stage">
+          <canvas id="banner-crop-canvas" width="1600" height="400" aria-label="Banner-Ausschnitt"></canvas>
+        </div>
+        <div class="banner-controls">
+          <label class="stack">Zoom
+            <input id="banner-zoom" type="range" min="1" max="3" step="0.01" value="1">
+          </label>
+          <button id="banner-reset-crop" type="button">Ausschnitt zurücksetzen</button>
+        </div>
+      </div>
+
+      <label class="stack">Alternativtext
+        <input id="banner-alt" class="banner-alt" type="text" maxlength="180" placeholder="Kurze Beschreibung des Bildes">
+      </label>
+      <label class="pill inline"><input type="checkbox" id="image-banner-enabled"> Banner anzeigen</label>
+
+      <div class="foot">
+        <button id="banner-remove" class="danger" type="button">Banner entfernen</button>
+        <button id="banner-save" type="button">Banner speichern</button>
+      </div>
+      <div id="banner-status" class="muted banner-status" role="status" aria-live="polite"></div>
+    </div>
+
+    <div class="card" id="exams">
 
 
 
@@ -1071,7 +1145,9 @@ const state = {
 
 
 
-  settings: { timeColumnWidth: "60" }
+  settings: { timeColumnWidth: "60" },
+
+  image_banner: null
 
 
 
@@ -1307,7 +1383,9 @@ async function loadState(){
 
 
 
-  state.settings = j.settings || state.settings || { timeColumnWidth: "60" };
+  state.settings = j.settings || state.settings || { timeColumnWidth: "60" };
+
+  state.image_banner = j.image_banner || null;
 
 
 
@@ -1395,7 +1473,9 @@ async function loadState(){
 
 
 
-  renderSettings();
+  renderSettings();
+
+  syncBannerAdmin(state.image_banner);
 
 
 
@@ -2438,7 +2518,276 @@ if (sliderTimeCol && sliderTimeColValue) {
 
 
 
-const saveSettingsBtn = document.getElementById("save-settings");
+const IMAGE_BANNER_WIDTH = 1600;
+const IMAGE_BANNER_HEIGHT = 400;
+const IMAGE_BANNER_MAX_SOURCE_BYTES = 12 * 1024 * 1024;
+const imageBannerCurrent = document.getElementById("banner-current");
+const imageBannerCurrentEmpty = document.getElementById("banner-current-empty");
+const imageBannerCurrentImage = document.getElementById("banner-current-image");
+const imageBannerFile = document.getElementById("banner-file");
+const imageBannerFileName = document.getElementById("banner-file-name");
+const imageBannerCropEditor = document.getElementById("banner-crop-editor");
+const imageBannerCropStage = document.getElementById("banner-crop-stage");
+const imageBannerCanvas = document.getElementById("banner-crop-canvas");
+const imageBannerZoom = document.getElementById("banner-zoom");
+const imageBannerReset = document.getElementById("banner-reset-crop");
+const imageBannerAlt = document.getElementById("banner-alt");
+const imageBannerEnabled = document.getElementById("image-banner-enabled");
+const imageBannerRemove = document.getElementById("banner-remove");
+const imageBannerSave = document.getElementById("banner-save");
+const imageBannerStatus = document.getElementById("banner-status");
+
+let imageBannerSource = null;
+let imageBannerBaseScale = 1;
+let imageBannerZoomValue = 1;
+let imageBannerOffsetX = 0;
+let imageBannerOffsetY = 0;
+let imageBannerDragging = false;
+let imageBannerLastPointer = null;
+let imageBannerHasStoredImage = false;
+let imageBannerLoadedVersion = "";
+let imageBannerLoadSequence = 0;
+
+function setImageBannerStatus(message, isError = false){
+  if (!imageBannerStatus) return;
+  imageBannerStatus.textContent = message || "";
+  imageBannerStatus.style.color = isError ? "#ff8a8a" : "";
+}
+
+function clampImageBannerOffset(){
+  if (!imageBannerSource) return;
+  const scale = imageBannerBaseScale * imageBannerZoomValue;
+  const drawnWidth = imageBannerSource.naturalWidth * scale;
+  const drawnHeight = imageBannerSource.naturalHeight * scale;
+  imageBannerOffsetX = Math.min(0, Math.max(IMAGE_BANNER_WIDTH - drawnWidth, imageBannerOffsetX));
+  imageBannerOffsetY = Math.min(0, Math.max(IMAGE_BANNER_HEIGHT - drawnHeight, imageBannerOffsetY));
+}
+
+function drawImageBannerCrop(){
+  if (!imageBannerCanvas || !imageBannerSource) return;
+  const context = imageBannerCanvas.getContext("2d");
+  if (!context) return;
+  clampImageBannerOffset();
+  context.clearRect(0, 0, IMAGE_BANNER_WIDTH, IMAGE_BANNER_HEIGHT);
+  const scale = imageBannerBaseScale * imageBannerZoomValue;
+  context.drawImage(
+    imageBannerSource,
+    imageBannerOffsetX,
+    imageBannerOffsetY,
+    imageBannerSource.naturalWidth * scale,
+    imageBannerSource.naturalHeight * scale
+  );
+}
+
+function resetImageBannerCrop(){
+  if (!imageBannerSource) return;
+  imageBannerBaseScale = Math.max(
+    IMAGE_BANNER_WIDTH / imageBannerSource.naturalWidth,
+    IMAGE_BANNER_HEIGHT / imageBannerSource.naturalHeight
+  );
+  imageBannerZoomValue = 1;
+  if (imageBannerZoom) imageBannerZoom.value = "1";
+  const drawnWidth = imageBannerSource.naturalWidth * imageBannerBaseScale;
+  const drawnHeight = imageBannerSource.naturalHeight * imageBannerBaseScale;
+  imageBannerOffsetX = (IMAGE_BANNER_WIDTH - drawnWidth) / 2;
+  imageBannerOffsetY = (IMAGE_BANNER_HEIGHT - drawnHeight) / 2;
+  drawImageBannerCrop();
+}
+
+function loadImageBannerCropSource(src){
+  const sequence = ++imageBannerLoadSequence;
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      if (sequence !== imageBannerLoadSequence) return resolve(false);
+      imageBannerSource = image;
+      if (imageBannerCropEditor) imageBannerCropEditor.hidden = false;
+      resetImageBannerCrop();
+      resolve(true);
+    };
+    image.onerror = () => reject(new Error("image_load_failed"));
+    image.src = src;
+  });
+}
+
+function syncBannerAdmin(meta){
+  imageBannerHasStoredImage = Boolean(meta && meta.imageUrl);
+  if (imageBannerCurrent) imageBannerCurrent.classList.toggle("empty", !imageBannerHasStoredImage);
+  if (imageBannerCurrentEmpty) imageBannerCurrentEmpty.hidden = imageBannerHasStoredImage;
+  if (imageBannerCurrentImage) {
+    imageBannerCurrentImage.hidden = !imageBannerHasStoredImage;
+    if (imageBannerHasStoredImage) {
+      imageBannerCurrentImage.src = meta.imageUrl;
+      imageBannerCurrentImage.alt = meta.alt || "Aktuelles Banner";
+    } else {
+      imageBannerCurrentImage.removeAttribute("src");
+    }
+  }
+  if (imageBannerAlt) imageBannerAlt.value = (meta && meta.alt) || "Schulbanner";
+  if (imageBannerEnabled) imageBannerEnabled.checked = Boolean(meta && meta.enabled);
+  if (imageBannerRemove) imageBannerRemove.disabled = !imageBannerHasStoredImage;
+
+  const version = imageBannerHasStoredImage ? String(meta.version || meta.imageUrl) : "";
+  if (!imageBannerHasStoredImage) {
+    imageBannerLoadedVersion = "";
+    imageBannerSource = null;
+    if (imageBannerCropEditor) imageBannerCropEditor.hidden = true;
+    if (imageBannerFileName) imageBannerFileName.textContent = "";
+    return;
+  }
+  if (version !== imageBannerLoadedVersion) {
+    imageBannerLoadedVersion = version;
+    loadImageBannerCropSource(meta.imageUrl).catch(() => {
+      setImageBannerStatus("Das gespeicherte Banner konnte nicht geladen werden.", true);
+    });
+  }
+}
+
+if (imageBannerFile) {
+  imageBannerFile.addEventListener("change", async () => {
+    const file = imageBannerFile.files && imageBannerFile.files[0];
+    if (!file) return;
+    if (!/^image\/(jpeg|png|webp)$/i.test(file.type || "")) {
+      setImageBannerStatus("Bitte eine JPEG-, PNG- oder WebP-Datei auswählen.", true);
+      imageBannerFile.value = "";
+      return;
+    }
+    if (file.size > IMAGE_BANNER_MAX_SOURCE_BYTES) {
+      setImageBannerStatus("Das Ausgangsbild darf höchstens 12 MB groß sein.", true);
+      imageBannerFile.value = "";
+      return;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      await loadImageBannerCropSource(objectUrl);
+      if (imageBannerFileName) imageBannerFileName.textContent = file.name;
+      if (imageBannerEnabled) imageBannerEnabled.checked = true;
+      setImageBannerStatus("Ausschnitt festlegen und anschließend speichern.");
+    } catch {
+      setImageBannerStatus("Das ausgewählte Bild konnte nicht gelesen werden.", true);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  });
+}
+
+if (imageBannerZoom) {
+  imageBannerZoom.addEventListener("input", () => {
+    if (!imageBannerSource) return;
+    const oldScale = imageBannerBaseScale * imageBannerZoomValue;
+    const sourceCenterX = (IMAGE_BANNER_WIDTH / 2 - imageBannerOffsetX) / oldScale;
+    const sourceCenterY = (IMAGE_BANNER_HEIGHT / 2 - imageBannerOffsetY) / oldScale;
+    imageBannerZoomValue = Number(imageBannerZoom.value) || 1;
+    const newScale = imageBannerBaseScale * imageBannerZoomValue;
+    imageBannerOffsetX = IMAGE_BANNER_WIDTH / 2 - sourceCenterX * newScale;
+    imageBannerOffsetY = IMAGE_BANNER_HEIGHT / 2 - sourceCenterY * newScale;
+    drawImageBannerCrop();
+  });
+}
+
+if (imageBannerReset) imageBannerReset.addEventListener("click", resetImageBannerCrop);
+
+if (imageBannerCropStage) {
+  imageBannerCropStage.addEventListener("pointerdown", (event) => {
+    if (!imageBannerSource) return;
+    imageBannerDragging = true;
+    imageBannerLastPointer = {x: event.clientX, y: event.clientY};
+    imageBannerCropStage.classList.add("dragging");
+    imageBannerCropStage.setPointerCapture(event.pointerId);
+  });
+  imageBannerCropStage.addEventListener("pointermove", (event) => {
+    if (!imageBannerDragging || !imageBannerLastPointer) return;
+    const rect = imageBannerCropStage.getBoundingClientRect();
+    imageBannerOffsetX += (event.clientX - imageBannerLastPointer.x) * IMAGE_BANNER_WIDTH / rect.width;
+    imageBannerOffsetY += (event.clientY - imageBannerLastPointer.y) * IMAGE_BANNER_HEIGHT / rect.height;
+    imageBannerLastPointer = {x: event.clientX, y: event.clientY};
+    drawImageBannerCrop();
+  });
+  const stopDragging = (event) => {
+    imageBannerDragging = false;
+    imageBannerLastPointer = null;
+    imageBannerCropStage.classList.remove("dragging");
+    if (event && imageBannerCropStage.hasPointerCapture(event.pointerId)) {
+      imageBannerCropStage.releasePointerCapture(event.pointerId);
+    }
+  };
+  imageBannerCropStage.addEventListener("pointerup", stopDragging);
+  imageBannerCropStage.addEventListener("pointercancel", stopDragging);
+}
+
+function imageBannerDataUrl(){
+  return new Promise((resolve, reject) => {
+    if (!imageBannerCanvas || !imageBannerSource) return resolve(null);
+    drawImageBannerCrop();
+    imageBannerCanvas.toBlob((blob) => {
+      if (!blob) return reject(new Error("image_export_failed"));
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("image_export_failed"));
+      reader.readAsDataURL(blob);
+    }, "image/jpeg", 0.88);
+  });
+}
+
+if (imageBannerSave) {
+  imageBannerSave.addEventListener("click", async () => {
+    if (!imageBannerSource && !imageBannerHasStoredImage) {
+      setImageBannerStatus("Bitte zuerst ein Bild auswählen.", true);
+      return;
+    }
+    imageBannerSave.disabled = true;
+    setImageBannerStatus("Banner wird gespeichert …");
+    try {
+      const imageData = await imageBannerDataUrl();
+      const response = await fetch("/api/admin/banner-image", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({
+          imageData,
+          alt: imageBannerAlt ? imageBannerAlt.value.trim() : "",
+          enabled: imageBannerEnabled ? imageBannerEnabled.checked : true,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) throw new Error(result.error || "save_failed");
+      state.image_banner = result.image_banner || null;
+      syncBannerAdmin(state.image_banner);
+      if (imageBannerFile) imageBannerFile.value = "";
+      if (imageBannerFileName) imageBannerFileName.textContent = "";
+      setImageBannerStatus("Banner gespeichert.");
+    } catch (error) {
+      const messages = {
+        banner_image_too_large: "Das fertige Banner ist zu groß. Bitte ein anderes Bild verwenden.",
+        banner_image_wrong_dimensions: "Der Banner-Ausschnitt hat nicht das erwartete Format.",
+        banner_image_invalid: "Das fertige Banner konnte nicht verarbeitet werden.",
+      };
+      setImageBannerStatus(messages[error.message] || "Banner konnte nicht gespeichert werden.", true);
+    } finally {
+      imageBannerSave.disabled = false;
+    }
+  });
+}
+
+if (imageBannerRemove) {
+  imageBannerRemove.addEventListener("click", async () => {
+    if (!imageBannerHasStoredImage || !confirm("Gespeichertes Banner wirklich entfernen?")) return;
+    imageBannerRemove.disabled = true;
+    try {
+      const response = await fetch("/api/admin/banner-image", {method: "DELETE"});
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) throw new Error(result.error || "delete_failed");
+      state.image_banner = null;
+      syncBannerAdmin(null);
+      setImageBannerStatus("Banner entfernt.");
+    } catch {
+      setImageBannerStatus("Banner konnte nicht entfernt werden.", true);
+    } finally {
+      imageBannerRemove.disabled = !imageBannerHasStoredImage;
+    }
+  });
+}
+
+const saveSettingsBtn = document.getElementById("save-settings");
 
 
 

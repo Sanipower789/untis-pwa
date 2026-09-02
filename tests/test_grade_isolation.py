@@ -1,3 +1,4 @@
+import base64
 import os
 import tempfile
 import unittest
@@ -61,6 +62,13 @@ class GradeIsolationTests(unittest.TestCase):
             grade: ["SAME RAW KEY"]
             for grade in app_module.SUPPORTED_GRADES
         }
+        with app_module.app.app_context():
+            app_module._set_settings({
+                "imageBannerData": "",
+                "imageBannerEnabled": "0",
+                "imageBannerAlt": "Schulbanner",
+                "imageBannerUpdatedAt": "0",
+            })
         self.client = app_module.app.test_client()
 
     def tearDown(self):
@@ -74,6 +82,78 @@ class GradeIsolationTests(unittest.TestCase):
     def _admin_login(self):
         with self.client.session_transaction() as session:
             session["admin_ok"] = True
+
+    @staticmethod
+    def _banner_data_url(width=1600, height=400):
+        sof_payload = (
+            b"\x08"
+            + height.to_bytes(2, "big")
+            + width.to_bytes(2, "big")
+            + b"\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00"
+        )
+        image = b"\xff\xd8\xff\xc0" + (17).to_bytes(2, "big") + sof_payload + b"\xff\xd9"
+        encoded = base64.b64encode(image).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}", image
+
+    def test_banner_admin_api_requires_login_and_exact_dimensions(self):
+        data_url, _ = self._banner_data_url()
+        unauthorized = self.client.post(
+            "/api/admin/banner-image",
+            json={"imageData": data_url, "enabled": True},
+        )
+        self.assertEqual(unauthorized.status_code, 401)
+
+        self._admin_login()
+        wrong_size, _ = self._banner_data_url(width=1599)
+        invalid = self.client.post(
+            "/api/admin/banner-image",
+            json={"imageData": wrong_size, "enabled": True},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.get_json()["error"], "banner_image_wrong_dimensions")
+
+    def test_banner_save_display_backup_and_delete(self):
+        self._admin_login()
+        data_url, image_bytes = self._banner_data_url()
+        with patch.object(app_module, "_maybe_send_backup"):
+            saved = self.client.post(
+                "/api/admin/banner-image",
+                json={
+                    "imageData": data_url,
+                    "enabled": True,
+                    "alt": "Schulfest",
+                },
+            )
+        self.assertEqual(saved.status_code, 200)
+        metadata = saved.get_json()["image_banner"]
+        self.assertTrue(metadata["enabled"])
+        self.assertEqual(metadata["alt"], "Schulfest")
+        self.assertEqual((metadata["width"], metadata["height"]), (1600, 400))
+
+        admin_state = self.client.get("/api/admin/state").get_json()
+        self.assertNotIn("imageBannerData", admin_state["settings"])
+        self.assertEqual(admin_state["image_banner"]["alt"], "Schulfest")
+
+        page = self.client.get("/").get_data(as_text=True)
+        self.assertIn('id="page-image-banner"', page)
+        self.assertIn('alt="Schulfest"', page)
+
+        image_response = self.client.get("/api/banner-image")
+        self.assertEqual(image_response.status_code, 200)
+        self.assertEqual(image_response.data, image_bytes)
+        self.assertEqual(image_response.mimetype, "image/jpeg")
+        self.assertIn("immutable", image_response.headers["Cache-Control"])
+
+        with app_module.app.app_context():
+            settings = app_module._build_backup_payload()["database"]["settings"]
+        self.assertEqual(settings["imageBannerData"], data_url)
+        self.assertEqual(settings["imageBannerEnabled"], "1")
+
+        with patch.object(app_module, "_maybe_send_backup"):
+            deleted = self.client.delete("/api/admin/banner-image")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertNotIn('id="page-image-banner"', self.client.get("/").get_data(as_text=True))
+        self.assertEqual(self.client.get("/api/banner-image").status_code, 404)
 
     def test_mapping_api_keeps_identical_keys_separate(self):
         payload = self.client.get("/api/mappings").get_json()
