@@ -74,6 +74,7 @@ from untis_client import (
     fetch_week_all,
     fetch_exams,
     fetch_subject_map,
+    fetch_schoolyear_subjects,
     fetch_class_map,
     fetch_teacher_map,
     available_grades,
@@ -676,15 +677,90 @@ _bootstrap_data_file(ROOM_MAP_PATH, LEGACY_ROOM_MAP_PATH)
 def _load_raw_subjects_for_grade(grade: str) -> list[str]:
     fname = os.path.join(DATA_DIR, f"subjects_raw_{grade.lower()}.txt")
     out: list[str] = []
+    schoolyear: str | None = None
     try:
         with open(fname, "r", encoding="utf-8") as f:
             for line in f:
                 s = line.strip()
-                if s and not s.startswith("#"):
+                if s.lower().startswith("# schoolyear:"):
+                    schoolyear = s.split(":", 1)[1].strip()
+                elif s and not s.startswith("#"):
                     out.append(s)
     except FileNotFoundError:
         pass
+    if schoolyear != _current_schoolyear_label():
+        return []
     return out
+
+
+def _current_schoolyear_label(today: date | None = None) -> str:
+    today = today or datetime.now(APP_TZ).date()
+    start_year = today.year if today.month >= 8 else today.year - 1
+    return f"{start_year}/{start_year + 1}"
+
+
+SUBJECT_CATALOG_TTL_SECONDS = 6 * 60 * 60
+SUBJECT_CATALOG_RETRY_SECONDS = 5 * 60
+_subject_catalog_cache: dict[str, list[str]] = {}
+_subject_catalog_cached_at: dict[str, float] = {}
+_subject_catalog_live: dict[str, bool] = {}
+_subject_catalog_lock = threading.Lock()
+
+
+def _current_subjects_for_grade(grade: str) -> list[str]:
+    """Return the current school-year catalog for exactly one grade."""
+    grade = _normalise_grade(grade)
+    if not grade:
+        return []
+
+    now = time.time()
+    cached_at = _subject_catalog_cached_at.get(grade, 0.0)
+    ttl = (
+        SUBJECT_CATALOG_TTL_SECONDS
+        if _subject_catalog_live.get(grade, False)
+        else SUBJECT_CATALOG_RETRY_SECONDS
+    )
+    if grade in _subject_catalog_cache and now - cached_at < ttl:
+        return list(_subject_catalog_cache[grade])
+
+    with _subject_catalog_lock:
+        now = time.time()
+        cached_at = _subject_catalog_cached_at.get(grade, 0.0)
+        ttl = (
+            SUBJECT_CATALOG_TTL_SECONDS
+            if _subject_catalog_live.get(grade, False)
+            else SUBJECT_CATALOG_RETRY_SECONDS
+        )
+        if grade in _subject_catalog_cache and now - cached_at < ttl:
+            return list(_subject_catalog_cache[grade])
+
+        try:
+            live_subjects = fetch_schoolyear_subjects(grade)
+            if not live_subjects:
+                raise RuntimeError("current school-year timetable contains no subjects")
+            subjects = live_subjects
+            live = True
+        except Exception as exc:
+            app.logger.warning(
+                "current subject catalog fetch failed for %s: %s; using cached fallback",
+                grade,
+                exc,
+            )
+            subjects = (
+                _subject_catalog_cache[grade]
+                if _subject_catalog_live.get(grade) and _subject_catalog_cache.get(grade)
+                else _load_raw_subjects_for_grade(grade)
+            )
+            live = False
+
+        subjects = sorted(
+            {str(subject or "").strip() for subject in subjects if str(subject or "").strip()},
+            key=str.casefold,
+        )
+        _subject_catalog_cache[grade] = subjects
+        _subject_catalog_cached_at[grade] = now
+        _subject_catalog_live[grade] = live
+        return list(subjects)
 
 def _load_cached_lessons_for_grade(grade: str) -> list[dict]:
     fname = os.path.join(DATA_DIR, "exports", f"lessons_mapped_{grade.lower()}.json")
@@ -906,11 +982,7 @@ def _subject_groups_for_grade(grade: str) -> dict[str, list[str]]:
     grade = _normalise_grade(grade)
     if not grade:
         return {}
-    raw_values = [
-        *_load_raw_subjects_for_grade(grade),
-        *SEEN_SUBJECTS_RAW_BY_GRADE.get(grade, []),
-    ]
-    grouped = _group_variants(raw_values)
+    grouped = _group_variants(_current_subjects_for_grade(grade))
     return dict(sorted(grouped.items()))
 
 # ---------- Timetable cache/throttle ----------
@@ -1055,10 +1127,7 @@ def api_courses():
         """Build per-grade options so EF/Q1/Q2 stay separated."""
         opts: dict[str, str] = {}
         mapping = _course_map_normalized_for_grade(grade)
-        raw_subjects = [
-            *_load_raw_subjects_for_grade(grade),
-            *SEEN_SUBJECTS_RAW_BY_GRADE.get(grade, []),
-        ]
+        raw_subjects = _current_subjects_for_grade(grade)
         for raw_subject in raw_subjects:
             left = str(raw_subject or "").strip()
             key = norm_key(left)

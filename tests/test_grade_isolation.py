@@ -52,6 +52,10 @@ class GradeIsolationTests(unittest.TestCase):
         self.old_room_path = app_module.ROOM_MAP_PATH
         self.old_available_grades = app_module.available_grades
         self.old_seen_by_grade = app_module.SEEN_SUBJECTS_RAW_BY_GRADE
+        self.old_fetch_schoolyear_subjects = app_module.fetch_schoolyear_subjects
+        self.old_subject_catalog_cache = app_module._subject_catalog_cache
+        self.old_subject_catalog_cached_at = app_module._subject_catalog_cached_at
+        self.old_subject_catalog_live = app_module._subject_catalog_live
 
         app_module.COURSE_MAP_PATHS = self.paths
         app_module.LEGACY_COURSE_MAP_PATH = str(root / "course_mapping.txt")
@@ -62,6 +66,10 @@ class GradeIsolationTests(unittest.TestCase):
             grade: ["SAME RAW KEY"]
             for grade in app_module.SUPPORTED_GRADES
         }
+        app_module.fetch_schoolyear_subjects = lambda grade: ["SAME RAW KEY"]
+        app_module._subject_catalog_cache = {}
+        app_module._subject_catalog_cached_at = {}
+        app_module._subject_catalog_live = {}
         with app_module.app.app_context():
             app_module._set_settings({
                 "imageBannerData": "",
@@ -77,6 +85,10 @@ class GradeIsolationTests(unittest.TestCase):
         app_module.ROOM_MAP_PATH = self.old_room_path
         app_module.available_grades = self.old_available_grades
         app_module.SEEN_SUBJECTS_RAW_BY_GRADE = self.old_seen_by_grade
+        app_module.fetch_schoolyear_subjects = self.old_fetch_schoolyear_subjects
+        app_module._subject_catalog_cache = self.old_subject_catalog_cache
+        app_module._subject_catalog_cached_at = self.old_subject_catalog_cached_at
+        app_module._subject_catalog_live = self.old_subject_catalog_live
         self.temp_dir.cleanup()
 
     def _admin_login(self):
@@ -169,6 +181,11 @@ class GradeIsolationTests(unittest.TestCase):
         admin_html = self.client.get("/admin/mappings").get_data(as_text=True)
         self.assertIn('id="subjects-q2"', admin_html)
         self.assertIn('id="save-sub-q2"', admin_html)
+        for grade in ("ef", "q1", "q2"):
+            self.assertIn(
+                f'id="only-unmapped-sub-{grade}" checked',
+                admin_html,
+            )
 
     def test_course_options_include_each_grade_with_its_own_label(self):
         payload = self.client.get("/api/courses").get_json()
@@ -183,11 +200,10 @@ class GradeIsolationTests(unittest.TestCase):
                 "ef only=EF course\nq1 only=Q1 course\nq2 only=Q2 course\n",
                 encoding="utf-8",
             )
-        app_module.SEEN_SUBJECTS_RAW_BY_GRADE = {
-            "EF": ["EF ONLY"],
-            "Q1": ["Q1 ONLY"],
-            "Q2": ["Q2 ONLY"],
-        }
+        app_module.fetch_schoolyear_subjects = lambda grade: [f"{grade} ONLY"]
+        app_module._subject_catalog_cache.clear()
+        app_module._subject_catalog_cached_at.clear()
+        app_module._subject_catalog_live.clear()
 
         with patch.object(app_module, "_load_raw_subjects_for_grade", return_value=[]):
             payload = self.client.get("/api/courses").get_json()
@@ -203,6 +219,65 @@ class GradeIsolationTests(unittest.TestCase):
         self.assertEqual(options_by_grade["EF"], {"EF:ef only"})
         self.assertEqual(options_by_grade["Q1"], {"Q1:q1 only"})
         self.assertEqual(options_by_grade["Q2"], {"Q2:q2 only"})
+
+    def test_course_options_ignore_stale_seen_subjects(self):
+        app_module.SEEN_SUBJECTS_RAW_BY_GRADE = {
+            grade: [f"STALE {grade}"]
+            for grade in app_module.SUPPORTED_GRADES
+        }
+        app_module.fetch_schoolyear_subjects = lambda grade: [f"CURRENT {grade}"]
+        app_module._subject_catalog_cache.clear()
+        app_module._subject_catalog_cached_at.clear()
+        app_module._subject_catalog_live.clear()
+
+        payload = self.client.get("/api/courses").get_json()
+        keys = {item["key"] for item in payload["courses"]}
+
+        for grade in app_module.SUPPORTED_GRADES:
+            self.assertIn(f"{grade}:current {grade.lower()}", keys)
+            self.assertNotIn(f"{grade}:stale {grade.lower()}", keys)
+
+    def test_course_catalog_falls_back_per_grade_without_seen_history(self):
+        app_module.SEEN_SUBJECTS_RAW_BY_GRADE = {
+            grade: [f"STALE {grade}"]
+            for grade in app_module.SUPPORTED_GRADES
+        }
+        app_module.fetch_schoolyear_subjects = Mock(side_effect=RuntimeError("offline"))
+        app_module._subject_catalog_cache.clear()
+        app_module._subject_catalog_cached_at.clear()
+        app_module._subject_catalog_live.clear()
+
+        with patch.object(
+            app_module,
+            "_load_raw_subjects_for_grade",
+            side_effect=lambda grade: [f"FALLBACK {grade}"],
+        ):
+            self.assertEqual(
+                app_module._current_subjects_for_grade("Q2"),
+                ["FALLBACK Q2"],
+            )
+
+    def test_static_course_catalog_must_match_current_schoolyear(self):
+        root = Path(self.temp_dir.name)
+        valid_year = app_module._current_schoolyear_label()
+        stale_year = "2025/2026" if valid_year != "2025/2026" else "2024/2025"
+        catalog = root / "subjects_raw_q2.txt"
+
+        with patch.object(app_module, "DATA_DIR", str(root)):
+            catalog.write_text(
+                f"# schoolyear: {stale_year}\nOld course\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(app_module._load_raw_subjects_for_grade("Q2"), [])
+
+            catalog.write_text(
+                f"# schoolyear: {valid_year}\nCurrent course\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                app_module._load_raw_subjects_for_grade("Q2"),
+                ["Current course"],
+            )
 
     def test_saved_mapping_only_course_does_not_redefine_grade_catalog(self):
         Path(self.paths["Q2"]).write_text(
@@ -237,6 +312,45 @@ class GradeIsolationTests(unittest.TestCase):
         self.assertNotIn("Q2:saved only", keys)
         self.assertNotIn("EF:saved only", keys)
         self.assertNotIn("Q1:saved only", keys)
+
+    def test_schoolyear_catalog_includes_every_subject_reference(self):
+        client = untis_client.UntisClient(
+            "https://example.invalid/WebUntis/jsonrpc.do",
+            "school",
+            "user",
+            "pass",
+            12,
+            1,
+        )
+
+        def rpc(method, _params):
+            if method == "getCurrentSchoolyear":
+                return {"startDate": 20260831, "endDate": 20270718}
+            if method == "getSubjects":
+                return [
+                    {"id": 1, "longName": "Course A"},
+                    {"id": 2, "longName": "Course B"},
+                ]
+            if method == "getTimetable":
+                return [
+                    {"su": [{"id": 2}, {"id": 1}]},
+                    {"su": [{"id": 2}]},
+                ]
+            raise AssertionError(method)
+
+        with patch.object(client, "_rpc_auth", side_effect=rpc) as rpc_mock:
+            self.assertEqual(
+                client.fetch_schoolyear_subjects(element_id=99, element_type=1),
+                ["Course A", "Course B"],
+            )
+        timetable_call = next(
+            call for call in rpc_mock.call_args_list
+            if call.args[0] == "getTimetable"
+        )
+        self.assertEqual(
+            timetable_call.args[1]["options"]["element"],
+            {"id": 99, "type": 1},
+        )
 
     def test_admin_rename_changes_only_the_requested_grade(self):
         self._admin_login()

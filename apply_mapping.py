@@ -11,7 +11,7 @@ EXPORT_DIR.mkdir(exist_ok=True)
 
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
-from untis_client import fetch_week, fetch_week_all, available_grades
+from untis_client import fetch_week, fetch_schoolyear_subjects, available_grades
 
 LEGACY_COURSE_MAP_FILE = BASE_DIR / "course_mapping.txt"
 LEGACY_ROOM_MAP_FILE   = BASE_DIR / "rooms_mapping.txt"
@@ -50,6 +50,16 @@ def _write_list(path: Path, values):
     with path.open("w", encoding="utf-8") as f:
         for v in sorted(values, key=lambda x: x.lower()):
             f.write(v + "\n")
+
+
+def _write_subject_catalog(path: Path, values):
+    today = datetime.today().date()
+    start_year = today.year if today.month >= 8 else today.year - 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        f.write(f"# schoolyear: {start_year}/{start_year + 1}\n")
+        for value in sorted(values, key=str.casefold):
+            f.write(value + "\n")
 
 
 def _collect_from_lessons(lessons):
@@ -118,7 +128,6 @@ def main():
     room_map   = read_mapping_file(ROOM_MAP_FILE, LEGACY_ROOM_MAP_FILE)
 
     summary = []
-    subjects_all = set()
     rooms_all = set()
 
     for grade in grades:
@@ -133,11 +142,15 @@ def main():
         with fname.open("w", encoding="utf-8") as f:
             json.dump(mapped, f, ensure_ascii=False, indent=2)
 
-        subs, rms = _collect_from_lessons(lessons)
-        subjects_all.update(subs)
+        week_subs, rms = _collect_from_lessons(lessons)
+        try:
+            subs = set(fetch_schoolyear_subjects(grade))
+        except Exception as exc:
+            print(f"[WARN] {grade}: full subject catalog fetch failed ({exc})")
+            subs = week_subs
         rooms_all.update(rms)
 
-        _write_list(DATA_DIR / f"subjects_raw_{grade.lower()}.txt", subs)
+        _write_subject_catalog(DATA_DIR / f"subjects_raw_{grade.lower()}.txt", subs)
         _write_list(DATA_DIR / f"rooms_raw_{grade.lower()}.txt", rms)
 
         summary.append((grade, fname, len(mapped)))
@@ -152,8 +165,6 @@ def main():
     for grade, fname, count in summary:
         print(f"  {grade}: wrote {fname} ({count} lessons)")
         print(f"       data/subjects_raw_{grade.lower()}.txt / data/rooms_raw_{grade.lower()}.txt")
-    if subjects_all:
-        _write_list(DATA_DIR / "subjects_raw_all.txt", subjects_all)
     if rooms_all:
         _write_list(DATA_DIR / "rooms_raw_all.txt", rooms_all)
 

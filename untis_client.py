@@ -356,6 +356,48 @@ class UntisClient:
         except Exception:
             return {}
 
+    def fetch_schoolyear_subjects(
+        self,
+        element_id: int | None = None,
+        element_type: int | None = None,
+    ) -> list[str]:
+        """Return subjects used by this element in the current school year."""
+        target_element_id = self.element_id if element_id is None else int(element_id)
+        target_element_type = self.element_type if element_type is None else int(element_type)
+        schoolyear = self._rpc_auth("getCurrentSchoolyear", {})
+        start_date = int(schoolyear.get("startDate") or 0)
+        end_date = int(schoolyear.get("endDate") or 0)
+        if start_date <= 0 or end_date <= 0:
+            raise RuntimeError("WebUntis returned an invalid current school year")
+
+        subjects = {
+            int(subject["id"]): (subject.get("longName") or subject.get("name") or "").strip()
+            for subject in self._rpc_auth("getSubjects", {})
+            if subject.get("id") is not None
+        }
+        timetable = self._rpc_auth(
+            "getTimetable",
+            {
+                "options": {
+                    "element": {"id": target_element_id, "type": target_element_type},
+                    "startDate": start_date,
+                    "endDate": end_date,
+                }
+            },
+        )
+
+        names: set[str] = set()
+        for period in timetable:
+            for subject_ref in period.get("su") or []:
+                try:
+                    subject_id = int(subject_ref.get("id"))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                name = subjects.get(subject_id, "")
+                if name:
+                    names.add(name)
+        return sorted(names, key=str.casefold)
+
     def fetch_class_map(self) -> dict[int, str]:
         try:
             return {
@@ -432,6 +474,25 @@ def fetch_exams(start_date: date, end_date: date, exam_type_id: int = 0, grade: 
 
 def fetch_subject_map(grade: str | None = None) -> dict[int, str]:
     return _pick_client(grade).fetch_subject_map()
+
+
+def fetch_schoolyear_subjects(grade: str | None = None) -> list[str]:
+    target = _pick_client(grade)
+    first_error: Exception | None = None
+    for client in [target, *(c for c in CLIENTS.values() if c is not target)]:
+        try:
+            subjects = client.fetch_schoolyear_subjects(
+                element_id=target.element_id,
+                element_type=target.element_type,
+            )
+            if subjects:
+                return subjects
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error:
+        raise first_error
+    return []
 
 
 def fetch_class_map(grade: str | None = None) -> dict[int, str]:
