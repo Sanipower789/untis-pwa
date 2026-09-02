@@ -4,6 +4,8 @@ __pycache__/
 *.zip
 .vscode/
 user_data.db
+last_backup.json
+last_good_timetable.json
 data/seen_subjects_raw_ef.json
 data/seen_subjects_raw_q1.json
 data/seen_subjects_raw_q2.json

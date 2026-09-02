@@ -23,37 +23,67 @@ At the yearly rollover, do not leave the same Untis account assigned to two grad
 `app.py` can POST backups to `BACKUP_WEBHOOK_URL` and auto-restore from `AUTO_RESTORE_URL` when the DB is empty.
 
 ### Apps Script (Web App) code
-Deploy a Google Apps Script as a Web App (Anyone with link). Replace `SHARED_TOKEN` if you want a shared-secret header check.
+Deploy a Google Apps Script as a Web App (Anyone with link). Replace `SHARED_TOKEN` with the same value as Render's `BACKUP_WEBHOOK_TOKEN`.
 
 ```javascript
 const FILE_NAME = "untis-backup.json";
-const TOKEN = "SHARED_TOKEN"; // optional; empty to disable
+const TOKEN = "SHARED_TOKEN";
+
+function output(value) {
+  return ContentService
+    .createTextOutput(typeof value === "string" ? value : JSON.stringify(value))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function authorized(e) {
+  return !TOKEN || (e && e.parameter && e.parameter.token === TOKEN);
+}
+
+function newestValidBackup() {
+  const files = DriveApp.getFilesByName(FILE_NAME);
+  let result = null;
+  while (files.hasNext()) {
+    const file = files.next();
+    const body = file.getBlob().getDataAsString();
+    try {
+      const parsed = JSON.parse(body);
+      if (!parsed.database || !Array.isArray(parsed.database.users)) continue;
+      if (!result || file.getLastUpdated() > result.file.getLastUpdated()) {
+        result = {file, body};
+      }
+    } catch (error) {
+      // Ignore empty or damaged duplicates left by older script versions.
+    }
+  }
+  return result;
+}
 
 function doPost(e) {
-  if (TOKEN && e?.parameter?.token !== TOKEN && e?.headers?.["x-backup-token"] !== TOKEN) {
-    return ContentService.createTextOutput("unauthorized").setMimeType(ContentService.MimeType.TEXT).setResponseCode(401);
+  if (!authorized(e)) return output({ok: false, error: "unauthorized"});
+  const body = e && e.postData ? e.postData.contents : "";
+  const parsed = JSON.parse(body);
+  if (!parsed.database || !Array.isArray(parsed.database.users)) {
+    return output({ok: false, error: "invalid_backup"});
   }
-  const body = e.postData?.getDataAsString() || "{}";
-  DriveApp.createFile(FILE_NAME, body, MimeType.JSON); // creates new version each time
-  return ContentService.createTextOutput("ok").setMimeType(ContentService.MimeType.TEXT);
+  const current = newestValidBackup();
+  if (current) current.file.setContent(body);
+  else DriveApp.createFile(FILE_NAME, body, MimeType.JSON);
+  return output({ok: true, users: parsed.database.users.length});
 }
 
 function doGet(e) {
-  if (TOKEN && e?.parameter?.token !== TOKEN && e?.headers?.["x-backup-token"] !== TOKEN) {
-    return ContentService.createTextOutput("unauthorized").setMimeType(ContentService.MimeType.TEXT).setResponseCode(401);
-  }
-  const files = DriveApp.getFilesByName(FILE_NAME);
-  if (!files.hasNext()) {
-    return ContentService.createTextOutput("{}").setMimeType(ContentService.MimeType.JSON);
-  }
-  const file = files.next();
-  return ContentService.createTextOutput(file.getBlob().getDataAsString()).setMimeType(ContentService.MimeType.JSON);
+  if (!authorized(e)) return output({ok: false, error: "unauthorized"});
+  const current = newestValidBackup();
+  return current ? output(current.body) : output({ok: false, error: "backup_not_found"});
 }
 ```
+
+After changing the script, create a new Web App deployment and update both Render URLs. Editing the source without creating a new deployment does not update the `/exec` endpoint.
 
 ### Render env for backup
 - `BACKUP_WEBHOOK_URL` = Web App deploy URL (use POST).
 - `AUTO_RESTORE_URL` = same Web App URL (GET).
+- `BACKUP_WEBHOOK_TOKEN` = the same value as `TOKEN` in Apps Script.
 - Optional: `AUTO_BACKUP_INTERVAL_MIN` = minutes between automatic backups (default 5). Requires `BACKUP_WEBHOOK_URL` to be set.
 - Optional: `AUTO_RESTORE_FORCE` = `1/true` to restore from `AUTO_RESTORE_URL` on every cold start even if the DB already has rows (overwrites existing data).
 

@@ -349,6 +349,61 @@ class GradeIsolationTests(unittest.TestCase):
         self.assertFalse(sent)
         backup_post.assert_not_called()
 
+    def test_backup_uses_configured_token_and_excludes_plaintext_passwords(self):
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            db.execute("DELETE FROM users")
+            db.execute(
+                "INSERT INTO users (username, password_hash, password_plain, profile_json) VALUES (?, ?, ?, ?)",
+                ("secure-backup-user", "password-hash", "must-not-leak", "{}"),
+            )
+            db.commit()
+            payload = app_module._build_backup_payload()
+            db.execute("DELETE FROM users")
+            db.commit()
+
+        backed_up_user = payload["database"]["users"][0]
+        self.assertNotIn("password_plain", backed_up_user)
+        self.assertEqual(backed_up_user["password_hash"], "password-hash")
+
+        remote_response = Mock()
+        remote_response.content = b'{"database":{"users":[]}}'
+        remote_response.raise_for_status.return_value = None
+        remote_response.json.return_value = {"database": {"users": []}}
+        post_response = Mock()
+        post_response.content = b'{"ok":true}'
+        post_response.raise_for_status.return_value = None
+        post_response.json.return_value = {"ok": True}
+        with (
+            patch.object(app_module, "BACKUP_WEBHOOK_URL", "https://backup.invalid"),
+            patch.object(app_module, "BACKUP_WEBHOOK_TOKEN", "shared-test-token"),
+            patch.object(app_module, "AUTO_RESTORE_URL", "https://restore.invalid"),
+            patch.object(app_module.requests, "get", return_value=remote_response),
+            patch.object(app_module.requests, "post", return_value=post_response) as backup_post,
+        ):
+            sent = app_module._maybe_send_backup("profile_update", payload)
+
+        self.assertTrue(sent)
+        request_kwargs = backup_post.call_args.kwargs
+        self.assertEqual(request_kwargs["params"], {"token": "shared-test-token"})
+        self.assertEqual(request_kwargs["headers"]["X-Backup-Token"], "shared-test-token")
+
+    def test_empty_remote_response_blocks_restore_and_backup(self):
+        empty_response = Mock()
+        empty_response.content = b""
+        empty_response.raise_for_status.return_value = None
+        payload = {"database": {"users": [{}]}}
+        with (
+            patch.object(app_module, "BACKUP_WEBHOOK_URL", "https://backup.invalid"),
+            patch.object(app_module, "AUTO_RESTORE_URL", "https://restore.invalid"),
+            patch.object(app_module.requests, "get", return_value=empty_response),
+            patch.object(app_module.requests, "post") as backup_post,
+        ):
+            sent = app_module._maybe_send_backup("profile_update", payload)
+
+        self.assertFalse(sent)
+        backup_post.assert_not_called()
+
     def test_profile_keeps_mixed_explicit_grades_for_client_cleanup(self):
         profile = app_module._normalise_profile({
             "grade": "Q2",

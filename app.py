@@ -105,7 +105,7 @@ ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN")
 DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
 AUTO_RESTORE_FORCE   = str(os.environ.get("AUTO_RESTORE_FORCE", "")).strip().lower() in ("1", "true", "yes", "on")
 BACKUP_WEBHOOK_URL   = os.environ.get("BACKUP_WEBHOOK_URL")
-BACKUP_WEBHOOK_TOKEN = None  # auth disabled
+BACKUP_WEBHOOK_TOKEN = os.environ.get("BACKUP_WEBHOOK_TOKEN")
 AUTO_RESTORE_URL     = os.environ.get("AUTO_RESTORE_URL")
 AUTO_BACKUP_INTERVAL_MIN = int(os.environ.get("AUTO_BACKUP_INTERVAL_MIN", "5"))
 SETTINGS_DEFAULTS  = {
@@ -159,6 +159,7 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN password_plain TEXT")
     except sqlite3.OperationalError:
         pass
+    conn.execute("UPDATE users SET password_plain = NULL WHERE password_plain IS NOT NULL")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS vacations (
@@ -1411,8 +1412,8 @@ def api_auth_register():
     db = get_db()
     try:
         cur = db.execute(
-            "INSERT INTO users (username, password_hash, password_plain, profile_json) VALUES (?, ?, ?, ?)",
-            (username, generate_password_hash(password), password, json.dumps(_empty_profile()))
+            "INSERT INTO users (username, password_hash, profile_json) VALUES (?, ?, ?)",
+            (username, generate_password_hash(password), json.dumps(_empty_profile()))
         )
         new_id = cur.lastrowid
         db.commit()
@@ -1509,7 +1510,7 @@ def _build_backup_payload() -> dict:
     users = []
     try:
         cur = db.execute(
-            "SELECT id, username, password_hash, password_plain, profile_json, created_at FROM users ORDER BY id"
+            "SELECT id, username, password_hash, profile_json, created_at FROM users ORDER BY id"
         )
         for row in cur.fetchall():
             prof = _load_profile_for_user(row)
@@ -1517,7 +1518,6 @@ def _build_backup_payload() -> dict:
                 "id": row["id"],
                 "username": row["username"],
                 "password_hash": row["password_hash"],
-                "password_plain": row["password_plain"],
                 "profile": prof,
                 "created_at": row["created_at"],
             })
@@ -1640,7 +1640,7 @@ def _apply_backup_payload(payload: dict) -> None:
                 profile = _empty_profile()
             profile_json = json.dumps(_normalise_profile(profile))
             created_at = entry.get("created_at") or datetime.utcnow().isoformat()
-            users_norm.append((user_id, username, entry.get("password_hash") or "", entry.get("password_plain"), profile_json, created_at))
+            users_norm.append((user_id, username, entry.get("password_hash") or "", profile_json, created_at))
 
     vacations_norm = []
     vacations = db_section.get("vacations") or []
@@ -1755,7 +1755,7 @@ def _apply_backup_payload(payload: dict) -> None:
 
         for row in users_norm:
             db.execute(
-                "INSERT INTO users (id, username, password_hash, password_plain, profile_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO users (id, username, password_hash, profile_json, created_at) VALUES (?, ?, ?, ?, ?)",
                 row
             )
 
@@ -1819,6 +1819,35 @@ def _database_user_count() -> int:
 _BACKUP_SHRINK_TRIGGERS = {"admin_user_delete", "admin_restore"}
 
 
+def _backup_request_options() -> tuple[dict, dict]:
+    params = {}
+    headers = {"User-Agent": "untis-pwa/backup"}
+    if BACKUP_WEBHOOK_TOKEN:
+        params["token"] = BACKUP_WEBHOOK_TOKEN
+        headers["X-Backup-Token"] = BACKUP_WEBHOOK_TOKEN
+        headers["Authorization"] = f"Bearer {BACKUP_WEBHOOK_TOKEN}"
+    return params, headers
+
+
+def _fetch_remote_backup() -> dict:
+    if not AUTO_RESTORE_URL:
+        raise ValueError("backup_restore_url_missing")
+    params, headers = _backup_request_options()
+    response = requests.get(
+        AUTO_RESTORE_URL,
+        params=params,
+        headers=headers,
+        timeout=20,
+    )
+    response.raise_for_status()
+    if not response.content:
+        raise ValueError("backup_response_empty")
+    payload = response.json()
+    if _backup_user_count(payload) is None:
+        raise ValueError("backup_users_invalid")
+    return payload
+
+
 def _maybe_send_backup(trigger: str = "manual", payload: dict | None = None) -> bool:
     """
     Push a fresh backup to a webhook if configured (Render free tier loses disk).
@@ -1840,9 +1869,7 @@ def _maybe_send_backup(trigger: str = "manual", payload: dict | None = None) -> 
 
         if not allow_shrink and AUTO_RESTORE_URL:
             try:
-                remote = requests.get(AUTO_RESTORE_URL, timeout=20)
-                remote.raise_for_status()
-                remote_user_count = _backup_user_count(remote.json())
+                remote_user_count = _backup_user_count(_fetch_remote_backup())
             except Exception as exc:
                 app.logger.warning(
                     "backup skipped (%s): remote safety check failed: %s",
@@ -1860,14 +1887,24 @@ def _maybe_send_backup(trigger: str = "manual", payload: dict | None = None) -> 
                 )
                 return False
 
-        headers = {"User-Agent": "untis-pwa/backup"}
+        params, headers = _backup_request_options()
         response = requests.post(
             BACKUP_WEBHOOK_URL,
             json=data,
+            params=params,
             timeout=8,
             headers=headers,
         )
         response.raise_for_status()
+        if response.content:
+            try:
+                acknowledgement = response.json()
+            except (TypeError, ValueError):
+                acknowledgement = None
+            if isinstance(acknowledgement, dict) and acknowledgement.get("ok") is False:
+                raise RuntimeError(
+                    f"backup service rejected request: {acknowledgement.get('error', 'unknown')}"
+                )
         return True
     except Exception as exc:
         app.logger.warning("backup webhook failed (%s): %s", trigger, exc)
@@ -1885,12 +1922,8 @@ def _maybe_auto_restore() -> bool:
         app.logger.warning("auto-restore precheck failed: %s", exc)
         return False
     try:
-        resp = requests.get(AUTO_RESTORE_URL, timeout=20)
-        resp.raise_for_status()
-        payload = resp.json()
+        payload = _fetch_remote_backup()
         expected_users = _backup_user_count(payload)
-        if expected_users is None:
-            raise ValueError("backup_users_invalid")
         _apply_backup_payload(payload)
         restored_users = _database_user_count()
         if restored_users != expected_users:
@@ -1947,8 +1980,12 @@ try:
                 "startup backup disabled because the user database could not "
                 "be restored safely"
             )
+            if AUTO_RESTORE_URL:
+                raise RuntimeError("configured remote backup could not be restored")
 except Exception:
     app.logger.exception("auto-restore hook failed")
+    if AUTO_RESTORE_URL:
+        raise
 
 
 @app.route("/api/admin/backup")
@@ -2008,7 +2045,7 @@ def admin_state():
     user_rows = []
     try:
         cur = get_db().execute(
-            "SELECT id, username, password_plain, password_hash FROM users ORDER BY LOWER(username)"
+            "SELECT id, username FROM users ORDER BY LOWER(username)"
         )
         rows = cur.fetchall()
         user_rows = []
