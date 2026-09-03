@@ -885,6 +885,11 @@ def _current_subjects_for_grade(grade: str) -> list[str]:
             {str(subject or "").strip() for subject in subjects if str(subject or "").strip()},
             key=str.casefold,
         )
+        if live:
+            try:
+                _prune_course_mapping_for_grade(grade, subjects)
+            except Exception as exc:
+                app.logger.warning("stale course mapping cleanup failed for %s: %s", grade, exc)
         _subject_catalog_cache[grade] = subjects
         _subject_catalog_cached_at[grade] = now
         _subject_catalog_live[grade] = live
@@ -982,8 +987,10 @@ def _write_mapping_txt(path: str, mapping: dict[str, str]) -> None:
     lines = []
     for nk in sorted(mapping.keys()):
         lines.append(f"{nk}={mapping[nk]}")
-    with open(path, "w", encoding="utf-8") as f:
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + ("\n" if lines else ""))
+    os.replace(tmp_path, path)
 
 # course mapping helpers (per-grade files, merged views)
 def _course_map_path_for_grade(grade: str) -> str | None:
@@ -1001,6 +1008,25 @@ def _course_map_write_for_grade(grade: str, mapping: dict[str, str]) -> None:
     if not path:
         return
     _write_mapping_txt(path, mapping)
+
+
+def _active_course_map_for_grade(
+    grade: str,
+    active_subjects: list[str] | tuple[str, ...] | set[str],
+) -> dict[str, str]:
+    """Return rename mappings only for subjects in the active school year."""
+    active_keys = {norm_key(subject) for subject in active_subjects}
+    active_keys.discard("")
+    mapping = _course_map_normalized_for_grade(grade)
+    return {key: value for key, value in mapping.items() if key in active_keys}
+
+
+def _prune_course_mapping_for_grade(grade: str, active_subjects: list[str]) -> None:
+    """Remove stale mappings only after a successful live catalog fetch."""
+    current = _course_map_normalized_for_grade(grade)
+    active = _active_course_map_for_grade(grade, active_subjects)
+    if active != current:
+        _course_map_write_for_grade(grade, active)
 
 # ---------- Seen keys (store raw & normalised) ----------
 SEEN_SUB_RAW_PATH = os.path.join(DATA_DIR, "seen_subjects_raw.json")
@@ -1254,13 +1280,18 @@ def service_worker():
 
 @app.route("/api/mappings")
 def api_mappings():
+    active_subjects = {
+        grade: _current_subjects_for_grade(grade)
+        for grade in SUPPORTED_GRADES
+    }
     course_maps = {
-        grade: _course_map_normalized_for_grade(grade)
+        grade: _active_course_map_for_grade(grade, active_subjects[grade])
         for grade in SUPPORTED_GRADES
     }
     room_map   = _parse_mapping(ROOM_MAP_PATH)
     return _no_store(jsonify({
         "ok": True,
+        "schoolyear": _current_schoolyear_label(),
         "coursesByGrade": course_maps,
         "rooms": room_map,
     }))
@@ -1274,8 +1305,8 @@ def api_courses():
     def _options_for_grade(grade: str) -> dict[str, str]:
         """Build per-grade options so EF/Q1/Q2 stay separated."""
         opts: dict[str, str] = {}
-        mapping = _course_map_normalized_for_grade(grade)
         raw_subjects = _current_subjects_for_grade(grade)
+        mapping = _active_course_map_for_grade(grade, raw_subjects)
         for raw_subject in raw_subjects:
             left = str(raw_subject or "").strip()
             key = norm_key(left)
@@ -1289,7 +1320,11 @@ def api_courses():
         grade_opts = _options_for_grade(grade)
         for key in sorted(grade_opts.keys(), key=lambda k: (grade_opts[k].lower(), grade_opts[k])):
             items.append({"key": f"{grade}:{key}", "label": grade_opts[key], "grade": grade})
-    return _no_store(jsonify({"ok": True, "courses": items}))
+    return _no_store(jsonify({
+        "ok": True,
+        "schoolyear": _current_schoolyear_label(),
+        "courses": items,
+    }))
 
 @app.route("/api/health")
 def api_health():
@@ -3105,16 +3140,19 @@ def admin_state():
     if not _require_admin():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
+    active_subjects_by_grade = {
+        grade: _current_subjects_for_grade(grade)
+        for grade in SUPPORTED_GRADES
+    }
+    groups_by_grade = {
+        grade: dict(sorted(_group_variants(active_subjects_by_grade[grade]).items()))
+        for grade in SUPPORTED_GRADES
+    }
     courses_by_grade = {
-        grade: _course_map_normalized_for_grade(grade)
+        grade: _active_course_map_for_grade(grade, active_subjects_by_grade[grade])
         for grade in SUPPORTED_GRADES
     }
     rooms   = _parse_mapping(ROOM_MAP_PATH)
-
-    groups_by_grade = {
-        grade: _subject_groups_for_grade(grade)
-        for grade in SUPPORTED_GRADES
-    }
     groups_rm  = _group_variants(SEEN_ROOMS_RAW)
 
     unmapped_by_grade = {
@@ -3194,6 +3232,7 @@ def admin_state():
 
     return _no_store(jsonify({
         "ok": True,
+        "schoolyear": _current_schoolyear_label(),
         **{
             f"courses_{grade.lower()}": courses_by_grade[grade]
             for grade in SUPPORTED_GRADES
@@ -3249,10 +3288,18 @@ def admin_save():
         new_courses_by_grade[grade] = incoming
 
     for grade, incoming in new_courses_by_grade.items():
-        grade_courses = _course_map_normalized_for_grade(grade)
+        active_subjects = _current_subjects_for_grade(grade)
+        active_keys = {norm_key(subject) for subject in active_subjects}
+        active_keys.discard("")
+        if not active_keys:
+            return jsonify({
+                "ok": False,
+                "error": f"active_course_catalog_unavailable_{grade.lower()}",
+            }), 503
+        grade_courses = _active_course_map_for_grade(grade, active_subjects)
         for k, v in incoming.items():
             nk = norm_key(k)
-            if nk:
+            if nk in active_keys:
                 grade_courses[nk] = (v or "").strip()
         _course_map_write_for_grade(grade, grade_courses)
 

@@ -225,6 +225,63 @@ class GradeIsolationTests(unittest.TestCase):
         self.assertEqual(options_by_grade["Q1"], {"Q1:q1 only"})
         self.assertEqual(options_by_grade["Q2"], {"Q2:q2 only"})
 
+    def test_live_catalog_removes_stale_mapping_keys_from_api_and_storage(self):
+        Path(self.paths["EF"]).write_text(
+            "same raw key=Current EF name\nold ef course=Old EF name\n",
+            encoding="utf-8",
+        )
+        app_module.fetch_schoolyear_subjects = lambda grade: ["SAME RAW KEY"]
+        app_module._subject_catalog_cache.clear()
+        app_module._subject_catalog_cached_at.clear()
+        app_module._subject_catalog_live.clear()
+
+        payload = self.client.get("/api/mappings").get_json()
+
+        self.assertEqual(payload["schoolyear"], app_module._current_schoolyear_label())
+        self.assertEqual(
+            payload["coursesByGrade"]["EF"],
+            {"same raw key": "Current EF name"},
+        )
+        self.assertEqual(
+            app_module._course_map_normalized_for_grade("EF"),
+            {"same raw key": "Current EF name"},
+        )
+
+    def test_admin_cannot_restore_a_mapping_for_an_inactive_course(self):
+        self._admin_login()
+        response = self.client.post(
+            "/api/admin/save",
+            json={
+                "courses_ef": {
+                    "same raw key": "Renamed current EF",
+                    "old ef course": "Must not return",
+                }
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            app_module._course_map_normalized_for_grade("EF"),
+            {"same raw key": "Renamed current EF"},
+        )
+
+    def test_admin_does_not_prune_mappings_when_catalog_is_unavailable(self):
+        self._admin_login()
+        original = app_module._course_map_normalized_for_grade("EF")
+        app_module.fetch_schoolyear_subjects = Mock(side_effect=RuntimeError("offline"))
+        app_module._subject_catalog_cache.clear()
+        app_module._subject_catalog_cached_at.clear()
+        app_module._subject_catalog_live.clear()
+
+        with patch.object(app_module, "_load_raw_subjects_for_grade", return_value=[]):
+            response = self.client.post(
+                "/api/admin/save",
+                json={"courses_ef": {"same raw key": "Should not be written"}},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(app_module._course_map_normalized_for_grade("EF"), original)
+
     def test_course_options_ignore_stale_seen_subjects(self):
         app_module.SEEN_SUBJECTS_RAW_BY_GRADE = {
             grade: [f"STALE {grade}"]
