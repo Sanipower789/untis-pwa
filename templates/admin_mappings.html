@@ -1323,7 +1323,15 @@ async function loadState(){
 
 
 
-    if (!r.ok){ alert("Nicht autorisiert."); location.href="/admin/login"; return; }
+    if (r.status === 401){
+      alert("Admin-Sitzung abgelaufen. Bitte erneut anmelden.");
+      location.href="/admin/login";
+      return;
+    }
+    if (!r.ok){
+      alert("Serverfehler beim Laden der Admin-Daten.");
+      return;
+    }
 
 
 

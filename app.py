@@ -179,16 +179,18 @@ def _connect_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
     conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
 def init_db():
     _ensure_db_path()
     conn = _connect_db()
-    journal_mode = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
-    if journal_mode != "wal":
-        app.logger.warning("SQLite WAL mode unavailable; active mode is %s", journal_mode)
+    # Render's ephemeral filesystem does not keep SQLite WAL sidecar files
+    # reliable across instance lifecycle events. Use the rollback journal and
+    # keep notification transactions short instead.
+    journal_mode = str(conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]).lower()
+    if journal_mode != "delete":
+        app.logger.warning("SQLite DELETE journal unavailable; active mode is %s", journal_mode)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -1219,8 +1221,8 @@ def add_no_cache(resp):
     return _no_store(resp)
 
 
-@app.errorhandler(sqlite3.OperationalError)
-def handle_sqlite_operational_error(exc):
+@app.errorhandler(sqlite3.Error)
+def handle_sqlite_error(exc):
     conn = g.get("db")
     if conn is not None:
         try:

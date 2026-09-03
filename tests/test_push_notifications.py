@@ -228,6 +228,8 @@ class PushNotificationTests(unittest.TestCase):
         self._login_admin()
         admin_html = self.client.get("/admin/mappings").get_data(as_text=True)
         self.assertIn('id="push-test-form"', admin_html)
+        self.assertIn("Admin-Sitzung abgelaufen. Bitte erneut anmelden.", admin_html)
+        self.assertIn("Serverfehler beim Laden der Admin-Daten.", admin_html)
         service_worker_response = self.client.get("/sw.js")
         service_worker = service_worker_response.get_data(as_text=True)
         service_worker_response.close()
@@ -236,28 +238,40 @@ class PushNotificationTests(unittest.TestCase):
         self.assertIn('url.pathname === "/api/banner-image"', service_worker)
         self.assertIn("await fresh.blob()", service_worker)
 
-    def test_admin_writes_succeed_while_another_connection_is_reading(self):
-        self._login_admin()
-        reader = app_module.sqlite3.connect(app_module.DB_PATH)
-        try:
-            journal_mode = reader.execute("PRAGMA journal_mode").fetchone()[0]
-            self.assertEqual(str(journal_mode).lower(), "wal")
-            reader.execute("BEGIN")
-            reader.execute("SELECT COUNT(*) FROM users").fetchone()
+    def test_database_uses_render_safe_journal_and_busy_timeout(self):
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            journal_mode = db.execute("PRAGMA journal_mode").fetchone()[0]
+            busy_timeout = db.execute("PRAGMA busy_timeout").fetchone()[0]
+        self.assertEqual(str(journal_mode).lower(), "delete")
+        self.assertEqual(int(busy_timeout), app_module.SQLITE_BUSY_TIMEOUT_MS)
 
-            response = self.client.post(
-                "/api/admin/vacations",
-                json={
-                    "title": "WAL concurrency test",
-                    "start_date": "2099-12-30",
-                    "end_date": "2099-12-30",
-                },
+    def test_notification_fetch_rolls_back_a_failed_transaction(self):
+        def fail_after_write(*_args):
+            app_module.get_db().execute(
+                "INSERT OR REPLACE INTO notification_runtime (key, value) VALUES (?, ?)",
+                ("rollback-test", "pending"),
             )
-            self.assertEqual(response.status_code, 200)
-            self.assertTrue(response.get_json()["ok"])
-        finally:
-            reader.rollback()
-            reader.close()
+            raise RuntimeError("snapshot failed")
+
+        with app_module.app.app_context():
+            with patch.object(app_module, "available_grades", return_value=["EF"]), \
+                 patch.object(app_module, "fetch_week", return_value=[]), \
+                 patch.object(
+                     app_module,
+                     "_compare_and_store_notification_snapshot",
+                     side_effect=fail_after_write,
+                 ):
+                events = app_module._fetch_notification_timetable_events(
+                    app_module.datetime.now(app_module.APP_TZ)
+                )
+            self.assertEqual(events, [])
+            self.assertFalse(app_module.get_db().in_transaction)
+            self.assertIsNone(
+                app_module.get_db().execute(
+                    "SELECT value FROM notification_runtime WHERE key = 'rollback-test'"
+                ).fetchone()
+            )
 
     def test_preferences_are_saved_per_account_and_normalised(self):
         self._login_user()
