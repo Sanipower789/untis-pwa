@@ -116,6 +116,10 @@ BACKUP_WEBHOOK_URL   = os.environ.get("BACKUP_WEBHOOK_URL")
 BACKUP_WEBHOOK_TOKEN = os.environ.get("BACKUP_WEBHOOK_TOKEN")
 AUTO_RESTORE_URL     = os.environ.get("AUTO_RESTORE_URL")
 AUTO_BACKUP_INTERVAL_MIN = int(os.environ.get("AUTO_BACKUP_INTERVAL_MIN", "5"))
+AUTO_RESTORE_RETRY_SECONDS = max(
+    30,
+    min(900, int(os.environ.get("AUTO_RESTORE_RETRY_SECONDS", "60"))),
+)
 SETTINGS_DEFAULTS  = {
     "timeColumnWidth": "60",
     "updateBannerText": "",
@@ -3196,7 +3200,43 @@ def _start_notification_worker() -> None:
     threading.Thread(target=_worker, name="notification-monitor", daemon=True).start()
 
 
+_runtime_workers_started = False
+_auto_restore_retry_started = False
 _auto_backup_started = False
+
+
+def _start_runtime_workers() -> None:
+    """Start backup/notification workers once a usable account database exists."""
+    global _runtime_workers_started
+    if _runtime_workers_started:
+        return
+    _runtime_workers_started = True
+    _maybe_send_backup("startup")
+    _start_auto_backup_worker()
+    _start_notification_worker()
+
+
+def _start_auto_restore_retry_worker() -> None:
+    """Retry a failed remote restore without taking down the web service."""
+    global _auto_restore_retry_started
+    if _auto_restore_retry_started or not AUTO_RESTORE_URL:
+        return
+    _auto_restore_retry_started = True
+
+    def _worker():
+        while True:
+            time.sleep(AUTO_RESTORE_RETRY_SECONDS)
+            try:
+                with app.app_context():
+                    if not _maybe_auto_restore():
+                        continue
+                    app.logger.info("deferred auto-restore succeeded")
+                    _start_runtime_workers()
+                    return
+            except Exception as exc:
+                app.logger.warning("deferred auto-restore failed: %s", exc)
+
+    threading.Thread(target=_worker, name="auto-restore-retry", daemon=True).start()
 
 
 def _start_auto_backup_worker():
@@ -3232,16 +3272,13 @@ def _start_auto_backup_worker():
 try:
     with app.app_context():
         if _maybe_auto_restore():
-            _maybe_send_backup("startup")
-            _start_auto_backup_worker()
-            _start_notification_worker()
+            _start_runtime_workers()
         else:
-            app.logger.error(
+            app.logger.warning(
                 "startup backup disabled because the user database could not "
-                "be restored safely"
+                "be restored safely; the service will retry restoration in the background"
             )
-            if AUTO_RESTORE_URL:
-                raise RuntimeError("configured remote backup could not be restored")
+            _start_auto_restore_retry_worker()
 except Exception:
     app.logger.exception("auto-restore hook failed")
     if AUTO_RESTORE_URL:
