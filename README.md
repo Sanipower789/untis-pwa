@@ -96,6 +96,13 @@ After changing the script, create a new Web App deployment and update both Rende
 - Optional: `AUTO_RESTORE_FORCE` = `1/true` to restore from `AUTO_RESTORE_URL` on every cold start even if the DB already has rows (overwrites existing data).
 
 ## Quick tests
+Automated regressions (Python dependencies from `requirements.txt`; Node.js 18+ for the grid tests):
+
+```sh
+python -m unittest discover -s tests -v
+node --test tests/timetable_grid.test.cjs
+```
+
 - Local: set `SECRET_KEY`, login, restart server → still logged in; cookie shows HttpOnly/Secure/SameSite=Lax, 30-day expiry.
 - Render: set `SECRET_KEY`, deploy, login, redeploy → still logged in.
 - Backup: click Admin ▸ Backup; confirm file appears in Drive; clear DB and restart to see auto-restore repopulate.

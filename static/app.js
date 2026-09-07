@@ -2281,7 +2281,7 @@ const PushNotifications = (() => {
 
   async function registrationAndSubscription() {
     const existing = await navigator.serviceWorker.getRegistration("/");
-    if (!existing) await navigator.serviceWorker.register("/sw.js?v=45");
+    if (!existing) await navigator.serviceWorker.register("/sw.js?v=46");
     const registration = await new Promise((resolve, reject) => {
       const timeout = window.setTimeout(
         () => reject(new Error("service_worker_ready_timeout")),
@@ -3833,7 +3833,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
     const d = dayIdxISO(l.date);
 
-    if (d >= 1 && d <= 5) {
+    // Old cached responses can include next Monday and cover this week's status.
+    if (d >= 1 && d <= 5 && isWithinWeek(l.date)) {
 
       valid.push(l);
 
@@ -4508,7 +4509,7 @@ if ("serviceWorker" in navigator) {
 
     try {
 
-      const reg = await navigator.serviceWorker.register("/sw.js?v=45");
+      const reg = await navigator.serviceWorker.register("/sw.js?v=46");
 
       reg.update();
 

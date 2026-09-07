@@ -237,7 +237,8 @@ class UntisClient:
 
     def fetch_week(self, week_start: date):
         """Fetch timetable Mon-Sun starting at week_start (Monday recommended)."""
-        s, e = week_start, week_start + timedelta(days=7)
+        # WebUntis endDate is inclusive; next Monday belongs to the next week.
+        s, e = week_start, week_start + timedelta(days=6)
 
         # raw timetable (with auto re-login)
         tt = self._rpc_auth(
