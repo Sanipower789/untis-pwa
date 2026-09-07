@@ -1,5 +1,5 @@
 // static/sw.js
-const CACHE = "untis-cache-v46";
+const CACHE = "untis-cache-v47";
 const CORE = ["/"]; // just cache the shell (index.html)
 
 self.addEventListener("install", (e) => {
@@ -49,20 +49,16 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // --- API: always fresh, fallback if offline
+  // Never turn a failed save/login into a successful empty API response.
   if (url.pathname.startsWith("/api/")) {
     event.respondWith((async () => {
       try {
         return await fetch(event.request, { cache: "no-store" });
       } catch {
-        const cached = await caches.match(event.request);
-        return (
-          cached ||
-          new Response(JSON.stringify({ ok: true, lessons: [] }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          })
-        );
+        return new Response(JSON.stringify({ ok: false, error: "offline" }), {
+          status: 503,
+          headers: { "content-type": "application/json", "cache-control": "no-store" },
+        });
       }
     })());
     return;

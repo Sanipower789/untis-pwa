@@ -107,6 +107,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
 ADMIN_TOKEN        = os.environ.get("ADMIN_TOKEN")
 DB_PATH            = os.environ.get("DB_PATH", os.path.join(DATA, "user_data.db"))
@@ -370,6 +371,26 @@ def _keep_sessions_permanent():
     if session.get("user_id") or session.get("admin_ok"):
         session.permanent = True
 
+@app.before_request
+def _validate_write_request():
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return None
+    origin = request.headers.get("Origin")
+    if request.headers.get("Sec-Fetch-Site") == "cross-site" or (
+        origin and urlparse(origin).netloc.lower() != request.host.lower()
+    ):
+        return jsonify({"ok": False, "error": "cross_origin_request"}), 403
+    if not request.path.startswith("/api/"):
+        return None
+    if request.is_json:
+        if not isinstance(request.get_json(silent=True), dict):
+            return jsonify({"ok": False, "error": "invalid_json_object"}), 400
+    elif request.method in ("POST", "PUT", "PATCH") and request.endpoint not in (
+        "api_auth_logout", "admin_run_notification_monitor",
+    ):
+        return jsonify({"ok": False, "error": "json_required"}), 400
+
+
 def _load_user(user_id):
     if not user_id:
         return None
@@ -471,6 +492,7 @@ def _normalise_klausuren(items):
             "subject": str(raw.get("subject") or "").strip(),
             "name": str(raw.get("name") or "").strip(),
             "date": str(raw.get("date") or "").strip(),
+            "grade": _normalise_grade(raw.get("grade")) or _course_grade_and_body(raw.get("subject"))[0],
         }
         try:
             entry["periodStart"] = int(raw.get("periodStart"))
@@ -510,7 +532,8 @@ def _normalise_colors(block):
     subjects_raw = block.get("subjects") or {}
     if isinstance(subjects_raw, dict):
         for raw_key, col in subjects_raw.items():
-            nk = norm_key(raw_key)
+            grade, body = _course_grade_and_body(raw_key)
+            nk = f"{grade}:{norm_key(body)}" if grade else norm_key(body)
             cleaned = _clean_hex_color(col)
             if nk and cleaned:
                 norm["subjects"][nk] = cleaned
@@ -1183,6 +1206,12 @@ def _normalize_manual_exam_input(data: dict) -> dict | None:
     end_hm   = _normalise_hm(data.get("end_time")   or data.get("end")   or data.get("endTime"))
     if not subj or not date_iso or not start_hm or not end_hm:
         return None
+    try:
+        date_iso = _parse_iso_date(date_iso).isoformat()
+    except ValueError:
+        return None
+    if not all(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value) for value in (start_hm, end_hm)) or end_hm <= start_hm:
+        return None
     name = _clean_str(data.get("name")) or subj
     classes = _clean_list_str(data.get("classes"))
     teachers = _clean_list_str(data.get("teachers"))
@@ -1191,6 +1220,8 @@ def _normalize_manual_exam_input(data: dict) -> dict | None:
     room_label = ", ".join(_clean_list_str(rooms) or ([] if not room else [room]))
     note = _clean_str(data.get("note"))
     grade = _clean_str(data.get("grade")).upper()
+    if grade not in SUPPORTED_GRADES:
+        return None
     return {
         "subject": subj,
         "name": name,
@@ -1242,6 +1273,9 @@ def _load_manual_exams(start: date, end: date) -> list[dict]:
 # ---------------- Routes ----------------
 @app.after_request
 def add_no_cache(resp):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+    resp.headers["Referrer-Policy"] = "same-origin"
     if request.endpoint == "banner_image":
         return resp
     return _no_store(resp)
@@ -1511,6 +1545,7 @@ def api_exams():
     manual_exams: list[dict] = []
     try:
         manual_exams = _load_manual_exams(start, end)
+        manual_exams = [exam for exam in manual_exams if exam.get("grade") in grades]
     except Exception:
         manual_exams = []
 
@@ -1657,9 +1692,11 @@ def api_auth_status():
 @app.route("/api/auth/register", methods=["POST"])
 def api_auth_register():
     data = request.get_json(silent=True) or {}
+    if not isinstance(data.get("username"), str) or not isinstance(data.get("password"), str):
+        return jsonify({"ok": False, "error": "invalid_input"}), 400
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
-    if not username or not password:
+    if not username or not password or len(username) > 100 or len(password) > 1024:
         return jsonify({"ok": False, "error": "invalid_input"}), 400
     db = get_db()
     try:
@@ -1670,6 +1707,7 @@ def api_auth_register():
         new_id = cur.lastrowid
         db.commit()
     except sqlite3.IntegrityError:
+        db.rollback()
         return jsonify({"ok": False, "error": "username_exists"}), 409
     session.permanent = True
     session["user_id"] = new_id
@@ -1680,9 +1718,11 @@ def api_auth_register():
 @app.route("/api/auth/login", methods=["POST"])
 def api_auth_login():
     data = request.get_json(silent=True) or {}
+    if not isinstance(data.get("username"), str) or not isinstance(data.get("password"), str):
+        return jsonify({"ok": False, "error": "invalid_input"}), 400
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
-    if not username or not password:
+    if not username or not password or len(username) > 100 or len(password) > 1024:
         return jsonify({"ok": False, "error": "invalid_input"}), 400
     row = None
     if username:
@@ -1882,12 +1922,6 @@ def api_profile():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     if request.method == "GET":
         profile = _load_profile_for_user(row)
-        # fallback: if empty courses, try last imported backup for this user
-        if not profile.get("courses"):
-            backup_prof = _backup_profile_for(row["username"])
-            if backup_prof:
-                profile = backup_prof
-                _save_profile(user_id, profile)
         payload = {
             "ok": True,
             "profile": profile,
@@ -1895,6 +1929,8 @@ def api_profile():
         }
         return _no_store(jsonify(payload))
     data = request.get_json(silent=True) or {}
+    if not isinstance(data.get("courses"), list):
+        return jsonify({"ok": False, "error": "profile_courses_required"}), 400
     profile = _normalise_profile(data)
     _save_profile(user_id, profile)
     _maybe_send_backup("profile_update")
@@ -1945,7 +1981,8 @@ def _build_backup_payload() -> dict:
                 "created_at": row["created_at"],
             })
     except Exception:
-        users = []
+        app.logger.exception("backup export failed while reading users")
+        raise
 
     push_subscriptions = []
     try:
@@ -1966,7 +2003,8 @@ def _build_backup_payload() -> dict:
                 "updated_at": row["updated_at"],
             })
     except Exception:
-        push_subscriptions = []
+        app.logger.exception("backup export failed while reading push subscriptions")
+        raise
 
     vacations = []
     try:
@@ -1982,7 +2020,8 @@ def _build_backup_payload() -> dict:
                 "created_at": row["created_at"],
             })
     except Exception:
-        vacations = []
+        app.logger.exception("backup export failed while reading vacations")
+        raise
 
     exams_manual = []
     try:
@@ -2005,7 +2044,8 @@ def _build_backup_payload() -> dict:
                 "created_at": row["created_at"],
             })
     except Exception:
-        exams_manual = []
+        app.logger.exception("backup export failed while reading exams")
+        raise
 
     settings_map = {}
     try:
@@ -2013,7 +2053,8 @@ def _build_backup_payload() -> dict:
         for row in cur.fetchall():
             settings_map[row["key"]] = row["value"]
     except Exception:
-        settings_map = {}
+        app.logger.exception("backup export failed while reading settings")
+        raise
     for key, default in SETTINGS_DEFAULTS.items():
         settings_map.setdefault(key, default)
 
@@ -2058,6 +2099,44 @@ def _apply_backup_payload(payload: dict) -> None:
     seen_section = payload.get("seen")
     if not isinstance(db_section, dict) or not isinstance(mappings_section, dict) or not isinstance(seen_section, dict):
         raise ValueError("backup_payload_invalid")
+
+    # Reject incomplete records before the destructive restore transaction.
+    if not isinstance(db_section.get("users"), list):
+        raise ValueError("backup_users_invalid")
+    usernames = set()
+    user_ids = set()
+    for entry in db_section["users"]:
+        if not isinstance(entry, dict):
+            raise ValueError("backup_user_invalid")
+        username = entry.get("username")
+        password_hash = entry.get("password_hash")
+        if not isinstance(username, str) or not username.strip() or not isinstance(password_hash, str) or not password_hash:
+            raise ValueError("backup_user_invalid")
+        if username.strip().lower() in usernames:
+            raise ValueError("backup_duplicate_user")
+        usernames.add(username.strip().lower())
+        if entry.get("id") is not None:
+            try:
+                user_id = int(entry["id"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("backup_user_id_invalid") from exc
+            if user_id <= 0 or user_id in user_ids:
+                raise ValueError("backup_user_id_invalid")
+            user_ids.add(user_id)
+        if "profile" in entry and not isinstance(entry["profile"], dict):
+            raise ValueError("backup_profile_invalid")
+        if "profile_json" in entry and "profile" not in entry:
+            try:
+                profile = json.loads(entry["profile_json"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("backup_profile_invalid") from exc
+            if not isinstance(profile, dict):
+                raise ValueError("backup_profile_invalid")
+    for key in ("vacations", "exams_manual", "push_subscriptions"):
+        if key in db_section and not isinstance(db_section[key], list):
+            raise ValueError(f"backup_{key}_invalid")
+    if "settings" in db_section and not isinstance(db_section["settings"], dict):
+        raise ValueError("backup_settings_invalid")
 
     # ---- Pre-validate and normalise before touching the DB ----
     users_norm = []
@@ -2212,6 +2291,10 @@ def _apply_backup_payload(payload: dict) -> None:
                 else []
             )
     rooms_norm = sorted({str(r or "").strip() for r in rooms_raw if str(r or "").strip()}) if isinstance(rooms_raw, list) else []
+
+    for key, normalised in (("vacations", vacations_norm), ("exams_manual", exams_manual_norm), ("push_subscriptions", push_subscriptions_norm)):
+        if len(normalised) != len(db_section.get(key, [])):
+            raise ValueError(f"backup_{key}_invalid")
 
     db = get_db()
     try:
@@ -2376,15 +2459,13 @@ def _maybe_send_backup(trigger: str = "manual", payload: dict | None = None) -> 
             headers=headers,
         )
         response.raise_for_status()
-        if response.content:
-            try:
-                acknowledgement = response.json()
-            except (TypeError, ValueError):
-                acknowledgement = None
-            if isinstance(acknowledgement, dict) and acknowledgement.get("ok") is False:
-                raise RuntimeError(
-                    f"backup service rejected request: {acknowledgement.get('error', 'unknown')}"
-                )
+        try:
+            acknowledgement = response.json()
+        except (TypeError, ValueError):
+            acknowledgement = None
+        acknowledged = isinstance(acknowledgement, dict) and acknowledgement.get("ok") is True
+        if not acknowledged and response.content.strip().lower() != b"ok":
+            raise RuntimeError("backup service did not acknowledge the backup")
         return True
     except Exception as exc:
         app.logger.warning("backup webhook failed (%s): %s", trigger, exc)

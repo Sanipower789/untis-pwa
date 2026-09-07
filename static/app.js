@@ -517,7 +517,7 @@ const mergeSubjects = (rawSubjects) => {
   const out = {};
   if (!rawSubjects || typeof rawSubjects !== "object") return out;
   Object.entries(rawSubjects).forEach(([key, value]) => {
-    const nk = normKey(key);
+    const nk = normKey(key).replace(/^(ef|q1|q2):/, grade => grade.toUpperCase());
     const col = normaliseHex(value);
     if (nk && col) out[nk] = col;
   });
@@ -603,7 +603,7 @@ const ColorPrefs = {
     return this.save(current, opts);
   },
   setSubjectColor(key, color, opts = {}) {
-    const nk = normKey(key);
+    const nk = normKey(key).replace(/^(ef|q1|q2):/, grade => grade.toUpperCase());
     const col = normaliseHex(color);
     if (!nk || !col) return this.load();
     const current = this.load();
@@ -611,7 +611,7 @@ const ColorPrefs = {
     return this.save(current, opts);
   },
   removeSubjectColor(key, opts = {}) {
-    const nk = normKey(key);
+    const nk = normKey(key).replace(/^(ef|q1|q2):/, grade => grade.toUpperCase());
     const current = this.load();
     if (nk && current.subjects[nk]) {
       delete current.subjects[nk];
@@ -806,6 +806,10 @@ function filterLessonsForProfile(lessons, selectedSet) {
   return (Array.isArray(lessons) ? lessons : []).filter(lesson => {
     const lessonGrade = String(lesson?.grade || "").trim().toUpperCase();
     if (lessonGrade !== grade) return false;
+    // Cancellations are important timetable information even when the course
+    // is no longer in the user's saved selection. Keep them visible within
+    // the active grade so a missed course selection cannot hide an absence.
+    if (String(lesson?.status || "").trim().toLowerCase() === "entfaellt") return true;
     return !(selectedSet instanceof Set) ||
       selectedSet.size === 0 ||
       lessonMatchesSelection(lesson, selectedSet);
@@ -1088,13 +1092,13 @@ function parseLegacyCourseValue(value, gradeHint = "") {
 
   const prefGrade = gradeFromKey(raw);
   if (prefGrade) {
-    if (!grade) grade = prefGrade;
+    grade = prefGrade;
     raw = raw.slice(raw.indexOf(":") + 1).trim();
   }
 
   const suffixMatch = raw.match(LEGACY_GRADE_RE);
   if (suffixMatch) {
-    if (!grade) grade = suffixMatch[1].toUpperCase();
+    grade = suffixMatch[1].toUpperCase();
     raw = raw.slice(0, suffixMatch.index).trim();
   }
 
@@ -1102,7 +1106,7 @@ function parseLegacyCourseValue(value, gradeHint = "") {
   const tailMatch = nk.match(/^(.*)\s(ef|q1|q2)$/i);
   if (tailMatch) {
     const tailGrade = tailMatch[2].toUpperCase();
-    if (!grade) grade = tailGrade;
+    grade = tailGrade;
     if (grade === tailGrade) raw = tailMatch[1].trim();
   }
 
@@ -1302,13 +1306,10 @@ function resolveCourseKey(value, gradeHint = "") {
   }
 
   for (const alias of aliases) {
-    if (grade) {
-      const gradeAlias = `${grade}::${alias}`;
-      if (COURSE_KEY_BY_LABEL.has(gradeAlias)) return COURSE_KEY_BY_LABEL.get(gradeAlias);
-    }
     const matchingKeys = COURSE_KEYS_BY_ALIAS.get(alias);
-    if (matchingKeys && matchingKeys.size === 1) {
-      return matchingKeys.values().next().value;
+    const scopedKeys = Array.from(matchingKeys || []).filter(key => !grade || gradeFromKey(key) === grade);
+    if (scopedKeys.length === 1) {
+      return scopedKeys[0];
     }
   }
 
@@ -1341,8 +1342,14 @@ function normaliseCourseSelection(values, gradeHint = getGrade()) {
     const key = resolveCourseKey(raw, explicitGrade || preferredGrade);
 
     if (!key) {
-      if (!explicitGrade && !preferredGrade && raw.trim()) unresolved.push(raw.trim());
-      else changed = true;
+      // An unavailable/partial catalog is not permission to delete saved choices.
+      if (raw.trim()) {
+        unresolved.push(raw.trim());
+        if (!seen.has(raw.trim())) {
+          seen.add(raw.trim());
+          out.push(raw.trim());
+        }
+      }
       return;
     }
 
@@ -1869,6 +1876,8 @@ formKlausur?.addEventListener('submit', (e) => {
 
     id: uid(),
 
+    grade: getGrade(),
+
     subject,
 
     name,
@@ -1927,11 +1936,11 @@ function renderKlausurList() {
 
         <strong>${escapeHtml(k.name)}</strong>
 
-        <small>${escapeHtml(k.subject || "")} - ${k.date}, ${escapeHtml(periodLabel || "")}</small>
+        <small>${escapeHtml(k.subject || "")} - ${escapeHtml(k.date)}, ${escapeHtml(periodLabel || "")}</small>
 
       </div>
 
-      ${isRemote ? `<span class="muted">Schule</span>` : `<button data-id="${k.id}" title="Löschen">Löschen</button>`}
+      ${isRemote ? `<span class="muted">Schule</span>` : `<button title="Löschen">Löschen</button>`}
 
     `;
 
@@ -2051,6 +2060,8 @@ const PushNotifications = (() => {
   let preferenceSaveTimer = null;
   let applyingPreferences = false;
   let statusRetryTimer = null;
+  const deviceDisabledKey = () => `untis-push-disabled-v1:${Auth.username().toLowerCase()}`;
+  const deviceDisabled = () => localStorage.getItem(deviceDisabledKey()) === "1";
 
   function normalisePreferences(value) {
     const source = value && typeof value === "object" ? value : {};
@@ -2281,7 +2292,7 @@ const PushNotifications = (() => {
 
   async function registrationAndSubscription() {
     const existing = await navigator.serviceWorker.getRegistration("/");
-    if (!existing) await navigator.serviceWorker.register("/sw.js?v=46");
+    if (!existing) await navigator.serviceWorker.register("/sw.js?v=47");
     const registration = await new Promise((resolve, reject) => {
       const timeout = window.setTimeout(
         () => reject(new Error("service_worker_ready_timeout")),
@@ -2307,6 +2318,12 @@ const PushNotifications = (() => {
     if (statusRetryTimer) {
       window.clearTimeout(statusRetryTimer);
       statusRetryTimer = null;
+    }
+    if (deviceDisabled()) {
+      closePrompt(true);
+      setStatus("Auf diesem Gerät deaktiviert.");
+      setControls(false, true);
+      return;
     }
     if (!supported()) {
       setStatus(window.isSecureContext
@@ -2379,6 +2396,7 @@ const PushNotifications = (() => {
 
       const local = await registrationAndSubscription();
       await ensureRegisteredSubscription(config, local);
+      localStorage.removeItem(deviceDisabledKey());
       setStatus("Auf diesem Gerät aktiviert.", "ok");
       setControls(true);
     } catch (error) {
@@ -2399,13 +2417,15 @@ const PushNotifications = (() => {
     try {
       const { subscription } = await registrationAndSubscription();
       if (subscription) {
-        await fetch("/api/push/subscription", {
+        const response = await fetch("/api/push/subscription", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ subscription: subscription.toJSON() }),
         });
+        if (!response.ok) throw new Error("push_delete_failed");
         await subscription.unsubscribe();
       }
+      localStorage.setItem(deviceDisabledKey(), "1");
       setStatus("Auf diesem Gerät deaktiviert.");
       setControls(false, true);
     } catch (error) {
@@ -2441,6 +2461,8 @@ const PushNotifications = (() => {
       });
     },
     setAuthenticated(value) {
+      if (preferenceSaveTimer) window.clearTimeout(preferenceSaveTimer);
+      preferenceSaveTimer = null;
       authenticated = Boolean(value);
       if (settingsElement) settingsElement.hidden = !authenticated;
       if (authenticated) {
@@ -4374,6 +4396,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
 /* --- Fetch + refresh --- */
 
+let timetableRequestId = 0;
+
 async function loadTimetable(force = false, weekStart = null) {
 
   if (typeof Auth === "object" && Auth && typeof Auth.isLoggedIn === "function" && !Auth.isLoggedIn()) {
@@ -4382,6 +4406,14 @@ async function loadTimetable(force = false, weekStart = null) {
 
   }
 
+  const requestId = ++timetableRequestId;
+  const targetWeekStart =
+    (typeof weekStart === "string" && weekStart) ||
+    (typeof window.__currentWeekStart === "string" && window.__currentWeekStart) ||
+    defaultWeekStartIso();
+  const requestedUser = Auth.username();
+  const stillCurrent = () => requestId === timetableRequestId && Auth.isLoggedIn() && Auth.username() === requestedUser;
+  window.__currentWeekStart = targetWeekStart;
   try {
 
     await loadVacations(force);
@@ -4390,14 +4422,11 @@ async function loadTimetable(force = false, weekStart = null) {
     await loadMappings();
 
     await loadCourseOptions();
+    if (!stillCurrent()) return;
 
     const params = new URLSearchParams();
     params.set("ts", Date.now());
     if (force) params.set("force", "1");
-    const targetWeekStart =
-      (typeof weekStart === "string" && weekStart) ||
-      (typeof window.__currentWeekStart === "string" && window.__currentWeekStart) ||
-      defaultWeekStartIso();
     if (targetWeekStart) {
       params.set("weekStart", targetWeekStart);
       window.__currentWeekStart = targetWeekStart;
@@ -4408,6 +4437,11 @@ async function loadTimetable(force = false, weekStart = null) {
     if (!res.ok) throw new Error(`/api/timetable ${res.status}`);
 
     const data = await res.json();
+
+    if (!stillCurrent()) return;
+    if (data.ok === false || data.weekStart !== targetWeekStart) {
+      throw new Error(data.error || "timetable_unavailable");
+    }
 
     let lessons = Array.isArray(data.lessons) ? data.lessons : [];
 
@@ -4431,6 +4465,7 @@ async function loadTimetable(force = false, weekStart = null) {
     if (cs && !cs.dataset.init) {
 
       await buildCourseSelection(lessons);
+      if (!stillCurrent()) return;
 
       cs.dataset.init = "1";
 
@@ -4475,6 +4510,8 @@ async function loadTimetable(force = false, weekStart = null) {
 
   } catch (err) {
 
+    if (!stillCurrent()) return;
+
     updateWeekRangeLabel(window.__currentWeekStart);
 
     const container = document.getElementById("timetable");
@@ -4509,7 +4546,7 @@ if ("serviceWorker" in navigator) {
 
     try {
 
-      const reg = await navigator.serviceWorker.register("/sw.js?v=46");
+      const reg = await navigator.serviceWorker.register("/sw.js?v=47");
 
       reg.update();
 
