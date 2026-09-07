@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -245,6 +246,24 @@ class PushNotificationTests(unittest.TestCase):
             busy_timeout = db.execute("PRAGMA busy_timeout").fetchone()[0]
         self.assertEqual(str(journal_mode).lower(), "delete")
         self.assertEqual(int(busy_timeout), app_module.SQLITE_BUSY_TIMEOUT_MS)
+
+    def test_notification_lease_treats_a_locked_database_as_busy(self):
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            db.execute("PRAGMA busy_timeout=0")
+            locker = sqlite3.connect(app_module.DB_PATH, timeout=0)
+            try:
+                locker.execute("BEGIN")
+                locker.execute("SELECT COUNT(*) FROM users").fetchone()
+                with patch.object(app_module, "SQLITE_LEASE_BUSY_TIMEOUT_MS", 1):
+                    acquired = app_module._acquire_notification_monitor_lease(
+                        int(app_module.time.time())
+                    )
+                self.assertFalse(acquired)
+                self.assertFalse(db.in_transaction)
+            finally:
+                locker.rollback()
+                locker.close()
 
     def test_notification_fetch_rolls_back_a_failed_transaction(self):
         def fail_after_write(*_args):

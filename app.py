@@ -146,6 +146,9 @@ except (TypeError, ValueError):
     NOTIFICATION_CHECK_INTERVAL_SECONDS = 300
 NOTIFICATION_CHECK_INTERVAL_SECONDS = max(30, min(3600, NOTIFICATION_CHECK_INTERVAL_SECONDS))
 SQLITE_BUSY_TIMEOUT_MS = 30_000
+# Lease checks must not wait behind a long-lived request for the full general
+# database timeout. A later monitor cycle can safely retry the check.
+SQLITE_LEASE_BUSY_TIMEOUT_MS = 1_000
 
 NOTIFICATION_PREFERENCES_DEFAULTS = {
     "enabled": True,
@@ -181,6 +184,24 @@ def _connect_db() -> sqlite3.Connection:
     conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+def _is_sqlite_lock_error(exc: BaseException) -> bool:
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in (
+        "database is locked",
+        "database table is locked",
+        "database schema is locked",
+    ))
+
+
+def _rollback_db(db: sqlite3.Connection) -> None:
+    try:
+        db.rollback()
+    except sqlite3.Error:
+        pass
 
 
 def init_db():
@@ -3066,6 +3087,10 @@ def _run_notification_cycle(now: datetime | None = None) -> dict:
 
 def _acquire_notification_monitor_lease(now_ts: int) -> bool:
     db = get_db()
+    previous_busy_timeout = int(
+        db.execute("PRAGMA busy_timeout").fetchone()[0]
+    )
+    db.execute(f"PRAGMA busy_timeout={SQLITE_LEASE_BUSY_TIMEOUT_MS}")
     try:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute(
@@ -3082,18 +3107,48 @@ def _acquire_notification_monitor_lease(now_ts: int) -> bool:
         )
         db.commit()
         return True
-    except Exception:
-        db.rollback()
+    except sqlite3.OperationalError as exc:
+        _rollback_db(db)
+        if _is_sqlite_lock_error(exc):
+            app.logger.warning(
+                "notification monitor skipped because the SQLite database is busy; "
+                "the next cycle will retry"
+            )
+            return False
         raise
+    except Exception:
+        _rollback_db(db)
+        raise
+    finally:
+        db.execute(f"PRAGMA busy_timeout={previous_busy_timeout}")
 
 
-def _release_notification_monitor_lease() -> None:
+def _release_notification_monitor_lease() -> bool:
     db = get_db()
-    db.execute(
-        "INSERT INTO notification_runtime (key, value) VALUES ('monitor_lease_until', '0') "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    previous_busy_timeout = int(
+        db.execute("PRAGMA busy_timeout").fetchone()[0]
     )
-    db.commit()
+    db.execute(f"PRAGMA busy_timeout={SQLITE_LEASE_BUSY_TIMEOUT_MS}")
+    try:
+        db.execute(
+            "INSERT INTO notification_runtime (key, value) VALUES ('monitor_lease_until', '0') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+        db.commit()
+        return True
+    except sqlite3.OperationalError as exc:
+        _rollback_db(db)
+        if _is_sqlite_lock_error(exc):
+            app.logger.warning(
+                "notification monitor lease release deferred because the SQLite database is busy"
+            )
+            return False
+        raise
+    except Exception:
+        _rollback_db(db)
+        raise
+    finally:
+        db.execute(f"PRAGMA busy_timeout={previous_busy_timeout}")
 
 
 _notification_worker_started = False
@@ -3119,8 +3174,16 @@ def _start_notification_worker() -> None:
                     if acquired:
                         result = _run_notification_cycle(datetime.now(APP_TZ))
                         app.logger.info("notification monitor completed: %s", result)
-            except Exception:
-                app.logger.exception("notification monitor failed")
+            except Exception as exc:
+                with app.app_context():
+                    _rollback_db(get_db())
+                if _is_sqlite_lock_error(exc):
+                    app.logger.warning(
+                        "notification monitor cycle skipped because the SQLite database is busy; "
+                        "the next cycle will retry"
+                    )
+                else:
+                    app.logger.exception("notification monitor failed")
             finally:
                 if acquired:
                     try:
