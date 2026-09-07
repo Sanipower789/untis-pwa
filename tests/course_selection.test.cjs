@@ -51,7 +51,7 @@ test('explicit saved grade wins over profile grade during migration', () => {
   assert.equal(ctx.resolveCourseKey('Q2:BI G1', 'Q1'), 'Q2:biology');
 });
 
-test('cancelled lessons remain visible even when their course is not selected', () => {
+test('cancelled lessons follow course selection without crossing grades', () => {
   const ctx = setup([{ key: 'Q1:biology', label: 'Biology', grade: 'Q1' }]);
   const lessons = [
     { grade: 'Q1', subject: 'Biology', status: 'normal' },
@@ -59,7 +59,11 @@ test('cancelled lessons remain visible even when their course is not selected', 
     { grade: 'Q2', subject: 'Chemistry', status: 'entfaellt' },
   ];
   assert.deepEqual(
-    ctx.filterLessonsForProfile(lessons, new Set(['Q1:biology'])),
+    ctx.filterLessonsForProfile(lessons, vm.runInContext("new Set(['Q1:biology'])", ctx)),
+    [lessons[0]],
+  );
+  assert.deepEqual(
+    ctx.filterLessonsForProfile(lessons, vm.runInContext("new Set(['Q1:biology', 'Q1:chemistry'])", ctx)),
     [lessons[0], lessons[1]],
   );
 });

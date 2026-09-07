@@ -806,10 +806,6 @@ function filterLessonsForProfile(lessons, selectedSet) {
   return (Array.isArray(lessons) ? lessons : []).filter(lesson => {
     const lessonGrade = String(lesson?.grade || "").trim().toUpperCase();
     if (lessonGrade !== grade) return false;
-    // Cancellations are important timetable information even when the course
-    // is no longer in the user's saved selection. Keep them visible within
-    // the active grade so a missed course selection cannot hide an absence.
-    if (String(lesson?.status || "").trim().toLowerCase() === "entfaellt") return true;
     return !(selectedSet instanceof Set) ||
       selectedSet.size === 0 ||
       lessonMatchesSelection(lesson, selectedSet);
