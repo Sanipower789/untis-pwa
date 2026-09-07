@@ -185,7 +185,13 @@ class UntisClient:
             raise
 
     # ----- public APIs -----
-    def _rest_exams(self, start_date: date, end_date: date, exam_type_id: int = 0):
+    def _rest_exams(
+        self,
+        start_date: date,
+        end_date: date,
+        exam_type_id: int = 0,
+        _refreshed: bool = False,
+    ):
         """
         Fetch exams via the new WebUntis REST endpoint (/api/exams).
         Falls back to the caller if the endpoint is not reachable.
@@ -213,12 +219,23 @@ class UntisClient:
             "User-Agent": "untis-pwa/1.0",
             "Referer": base + "/",
         }
-        resp = self.session.get(url, params=params, cookies=self._login(), headers=headers, timeout=25)
+        resp = self.session.get(url, params=params, cookies=self._login(refresh=_refreshed), headers=headers, timeout=25)
+        if resp.status_code in (401, 403) and not _refreshed:
+            self._invalidate_session()
+            return self._rest_exams(start_date, end_date, exam_type_id, _refreshed=True)
         resp.raise_for_status()
         try:
             payload = resp.json()
         except ValueError as exc:
-            raise RuntimeError(f"REST exams: invalid JSON ({exc})")
+            if not _refreshed:
+                self._invalidate_session()
+                return self._rest_exams(start_date, end_date, exam_type_id, _refreshed=True)
+            content_type = resp.headers.get("Content-Type", "unknown")
+            body_preview = " ".join((resp.text or "").split())[:180]
+            raise RuntimeError(
+                "REST exams: invalid JSON "
+                f"(status={resp.status_code}, content_type={content_type}, body={body_preview!r})"
+            ) from exc
 
         if isinstance(payload, dict):
             if payload.get("errors"):
@@ -343,9 +360,11 @@ class UntisClient:
         }
         try:
             return self._rpc_auth("getExams", payload)
-        except Exception:
+        except Exception as rpc_error:
             if first_error:
-                raise first_error
+                raise RuntimeError(
+                    f"REST exams failed ({first_error}); JSON-RPC fallback failed ({rpc_error})"
+                ) from rpc_error
             raise
 
     def fetch_subject_map(self) -> dict[int, str]:

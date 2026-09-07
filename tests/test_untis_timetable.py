@@ -1,7 +1,7 @@
 import os
 import unittest
 from datetime import date, timedelta
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 for key, value in {
@@ -16,6 +16,56 @@ from untis_client import UntisClient
 
 
 class TimetableWeekTests(unittest.TestCase):
+    def test_rest_exams_retries_once_after_non_json_session_response(self):
+        client = UntisClient(
+            "https://example.invalid/WebUntis/jsonrpc.do",
+            "school",
+            "user",
+            "pass",
+            element_id=2,
+            element_type=1,
+            label="Q1",
+        )
+        self.addCleanup(client.session.close)
+
+        invalid = Mock(
+            status_code=200,
+            headers={"Content-Type": "text/html"},
+            text="<html>login required</html>",
+        )
+        invalid.json.side_effect = ValueError("Expecting value")
+        invalid.raise_for_status.return_value = None
+        valid = Mock(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            text='{"data":{"exams":[]}}',
+        )
+        valid.json.return_value = {"data": {"exams": []}}
+        valid.raise_for_status.return_value = None
+
+        with patch.object(client.session, "get", side_effect=[invalid, valid]) as get, \
+             patch.object(
+                 client,
+                 "_login",
+                 side_effect=[{"JSESSIONID": "old"}, {"JSESSIONID": "fresh"}],
+             ) as login:
+            self.assertEqual(
+                client._rest_exams(date(2026, 9, 7), date(2026, 9, 13)),
+                [],
+            )
+
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(login.call_args_list[0].kwargs, {"refresh": False})
+        self.assertEqual(login.call_args_list[1].kwargs, {"refresh": True})
+
+    def test_exam_fallback_error_keeps_rest_and_rpc_context(self):
+        client = UntisClient("https://example.invalid", "school", "user", "pass", 2, 1, "Q1")
+        self.addCleanup(client.session.close)
+        with patch.object(client, "_rest_exams", side_effect=RuntimeError("REST invalid JSON")), \
+             patch.object(client, "_rpc_auth", side_effect=RuntimeError("no right for getExams()")):
+            with self.assertRaisesRegex(RuntimeError, "REST invalid JSON.*no right for getExams"):
+                client.fetch_exams(date(2026, 9, 7), date(2026, 9, 13))
+
     def test_week_ends_on_sunday_including_across_year_boundary(self):
         for start in (date(2026, 9, 7), date(2026, 12, 28)):
             for grade in ("EF", "Q1", "Q2"):
