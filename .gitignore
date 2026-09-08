@@ -5,6 +5,9 @@ __pycache__/
 .vscode/
 .venv/
 tools/
+.render-monitor-state.json
+.render-monitor/
+ops/*.tmp
 user_data.db
 last_backup.json
 last_good_timetable.json
