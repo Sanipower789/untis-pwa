@@ -213,12 +213,12 @@ def _rollback_db(db: sqlite3.Connection) -> None:
 def init_db():
     _ensure_db_path()
     conn = _connect_db()
-    # Readers (including the notification monitor) must not block save commits.
-    # SQLite owns the WAL sidecars; keep them beside the database, never delete them.
-    journal_mode = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
-    if journal_mode != "wal":
+    # Let SQLite checkpoint an existing WAL when returning to rollback journaling.
+    # Never remove WAL/SHM files: they may contain committed user data.
+    journal_mode = str(conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]).lower()
+    if journal_mode != "delete":
         conn.close()
-        raise RuntimeError(f"SQLite WAL unavailable; active mode is {journal_mode}")
+        raise RuntimeError(f"SQLite DELETE journal unavailable; active mode is {journal_mode}")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -760,7 +760,7 @@ def _save_profile(user_id, profile, *, preserve_homework=False):
     norm = json.dumps(_normalise_profile(profile))
     if preserve_homework:
         try:
-            db.execute("BEGIN IMMEDIATE")
+            db.execute("BEGIN EXCLUSIVE")
             current = _load_profile_for_user(_load_user(user_id))
             merged = _normalise_profile(profile)
             merged["homework"] = current["homework"]
@@ -1333,7 +1333,11 @@ def handle_sqlite_error(exc):
             conn.rollback()
         except sqlite3.Error:
             pass
-    app.logger.exception("SQLite operation failed")
+    app.logger.exception(
+        "SQLite operation failed: code=%s name=%s path=%s pid=%s",
+        getattr(exc, "sqlite_errorcode", None), getattr(exc, "sqlite_errorname", None),
+        os.path.abspath(DB_PATH), os.getpid(),
+    )
     if request.path.startswith("/api/"):
         locked = "locked" in str(exc).lower() or "busy" in str(exc).lower()
         message = (
@@ -2042,10 +2046,11 @@ def _homework_week(grade, week):
 
 
 def _edit_homework(user_id, edit):
+    # Acquire the full write lock before editing, so readers cannot block commit.
     # Fetch remote timetables BEFORE this short read-modify-write transaction.
     db = get_db()
     try:
-        db.execute("BEGIN IMMEDIATE")
+        db.execute("BEGIN EXCLUSIVE")
         row = _load_user(user_id)
         if not row:
             raise ValueError("unauthorized")

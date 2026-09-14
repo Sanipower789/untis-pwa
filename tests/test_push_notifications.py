@@ -239,12 +239,12 @@ class PushNotificationTests(unittest.TestCase):
         self.assertIn('url.pathname === "/api/banner-image"', service_worker)
         self.assertIn("await fresh.blob()", service_worker)
 
-    def test_database_uses_wal_and_busy_timeout(self):
+    def test_database_uses_rollback_journal_and_busy_timeout(self):
         with app_module.app.app_context():
             db = app_module.get_db()
             journal_mode = db.execute("PRAGMA journal_mode").fetchone()[0]
             busy_timeout = db.execute("PRAGMA busy_timeout").fetchone()[0]
-        self.assertEqual(str(journal_mode).lower(), "wal")
+        self.assertEqual(str(journal_mode).lower(), "delete")
         self.assertEqual(int(busy_timeout), app_module.SQLITE_BUSY_TIMEOUT_MS)
 
     def test_notification_lease_treats_a_locked_database_as_busy(self):

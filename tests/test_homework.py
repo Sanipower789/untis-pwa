@@ -188,7 +188,7 @@ class HomeworkAPITests(unittest.TestCase):
             self.assertFalse(app._homework_backup_running)
             self.assertEqual(self.backup.call_count, 2)
 
-    def test_homework_and_settings_commit_while_another_connection_is_reading(self):
+    def test_busy_reader_leaves_profile_unchanged_then_save_succeeds_after_release(self):
         reader = sqlite3.connect(app.DB_PATH, timeout=0)
         try:
             reader.execute('BEGIN')
@@ -196,15 +196,31 @@ class HomeworkAPITests(unittest.TestCase):
             with patch.object(app, 'SQLITE_BUSY_TIMEOUT_MS', 50):
                 result = self.client.post('/api/homework', json={
                     'course': 'Q1:ekeg8', 'text': 'Diagramm', 'mode': 'next'})
-                self.assertEqual(result.status_code, 200)
+                self.assertEqual(result.status_code, 503)
                 self.assertEqual(self.client.put('/api/homework-settings', json={
-                    'reminders': True, 'reminderTime': '17:00'}).status_code, 200)
+                    'reminders': True, 'reminderTime': '17:00'}).status_code, 503)
+            self.assertEqual(self.profile()['homework'], [])
+            reader.rollback()
+            self.assertEqual(self.client.post('/api/homework', json={
+                'course': 'Q1:ekeg8', 'text': 'Diagramm', 'mode': 'next'}).status_code, 200)
+            self.assertEqual(self.client.put('/api/homework-settings', json={
+                'reminders': True, 'reminderTime': '17:00'}).status_code, 200)
             profile = self.profile()
             self.assertEqual(profile['homework'][0]['text'], 'Diagramm')
             self.assertEqual(profile['homeworkSettings']['reminderTime'], '17:00')
         finally:
             reader.rollback()
             reader.close()
+
+    def test_startup_converts_existing_wal_without_losing_homework(self):
+        self.install()
+        with sqlite3.connect(app.DB_PATH) as connection:
+            self.assertEqual(connection.execute('PRAGMA journal_mode=WAL').fetchone()[0], 'wal')
+        connection.close()
+        with app.app.app_context():
+            app.init_db()
+            self.assertEqual(app.get_db().execute('PRAGMA journal_mode').fetchone()[0], 'delete')
+        self.assertEqual(self.profile()['homework'], [task()])
 
     def test_unselected_courses_and_other_users_ids_are_rejected(self):
         for course in ('EF:ekeg8', 'Q2:ekeg8', 'Q1:other'):
