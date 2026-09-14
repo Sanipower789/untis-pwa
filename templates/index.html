@@ -8,9 +8,9 @@
   {% if image_banner %}
   <link rel="preload" as="image" href="{{ image_banner.imageUrl }}">
   {% endif %}
-  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=47">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}?v=48">
   <meta name="theme-color" content="#6a1b9a" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=47">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=48">
 </head>
 <body>
 
@@ -73,9 +73,12 @@
     </div>
     <nav class="sidebar-nav">
       <button type="button" id="navKlausuren" class="sidebar-link active">Klausuren</button>
+      <button type="button" id="navHomework" class="sidebar-link">Hausaufgaben</button>
       <button type="button" id="navColors" class="sidebar-link">Farben</button>
+      <button type="button" id="navNotifications" class="sidebar-link">Benachrichtigungen</button>
     </nav>
 
+    <section id="panelNotifications" class="sidebar-panel" style="display:none;">
     <section id="sidebar-notifications" class="sidebar-notifications" hidden>
       <h3>Benachrichtigungen</h3>
       <p id="push-status" class="muted small" role="status" aria-live="polite">Status wird geladen.</p>
@@ -142,6 +145,7 @@
     </section>
 
     <!-- Klausuren Panel -->
+    </section>
     <section id="panelKlausuren" class="sidebar-panel">
       <details id="klausurAccordion" class="accordion" open>
         <summary>Klausuren verwalten</summary>
@@ -171,6 +175,52 @@
           <h4>Geplante Klausuren</h4>
           <div id="klausurList" class="klausur-list"></div>
         </div>
+      </details>
+    </section>
+
+    <section id="panelHomework" class="sidebar-panel" style="display:none;">
+      <h3>Hausaufgaben</h3>
+      <p id="homework-status" class="muted small" role="status" aria-live="polite"></p>
+      <form id="homework-form" class="homework-form">
+        <label>Fach<select id="homework-course" required></select></label>
+        <label>Aufgabe<textarea id="homework-text" rows="3" maxlength="2000" required></textarea></label>
+        <label>Fälligkeit<select id="homework-mode">
+          <option value="next">Bis zur nächsten Stunde</option>
+          <option value="date">Festes Datum</option>
+        </select></label>
+        <label id="homework-date-row" hidden>Datum<input id="homework-date" type="date"></label>
+        <label class="notification-toggle"><input id="homework-remind" type="checkbox" checked><span>An diese Aufgabe erinnern</span></label>
+        <div class="homework-actions">
+          <button type="submit" id="homework-save">Hinzufügen</button>
+          <button type="button" id="homework-reset" class="plain" hidden>Abbrechen</button>
+        </div>
+      </form>
+      <div class="homework-list-heading">
+        <h4>Aufgaben</h4>
+        <label class="notification-toggle"><input id="homework-show-done" type="checkbox"><span>Erledigte</span></label>
+      </div>
+      <div id="homework-list"></div>
+      <details class="homework-settings">
+        <summary>Einstellungen</summary>
+        <fieldset>
+          <legend>Markierungen</legend>
+          <label class="notification-toggle"><input id="homework-markers" type="checkbox"><span>Im Stundenplan anzeigen</span></label>
+          <label class="notification-select-row">Darstellung<select id="homework-style">
+            <option value="badge">HA-Symbol</option><option value="dot">Punkt</option><option value="outline">Rahmen</option>
+          </select></label>
+          <label class="notification-select-row">Farbe<input id="homework-color" type="color" value="#14b8a6"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Benachrichtigungen</legend>
+          <label class="notification-toggle"><input id="homework-notifications" type="checkbox"><span>Hausaufgaben-Erinnerungen</span></label>
+          <label class="notification-select-row">Vorlauf<select id="homework-days">
+            <option value="0">Am selben Tag</option><option value="1">1 Tag vorher</option>
+            <option value="2">2 Tage vorher</option><option value="3">3 Tage vorher</option><option value="7">7 Tage vorher</option>
+          </select></label>
+          <label class="notification-select-row">Uhrzeit<input id="homework-time" type="time" value="18:00"></label>
+          <p id="homework-push-hint" class="muted small"></p>
+        </fieldset>
+        <p id="homework-settings-status" class="muted small" role="status" aria-live="polite"></p>
       </details>
     </section>
 
@@ -253,6 +303,7 @@
       </header>
       <dl id="lesson-overlay-meta"></dl>
       <div id="lesson-overlay-note" class="lesson-overlay-note"></div>
+      <section id="lesson-overlay-homework" hidden></section>
     </div>
   </div>
 
@@ -306,7 +357,8 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='app.js') }}?v=47"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=48"></script>
+  <script src="{{ url_for('static', filename='homework.js') }}?v=48"></script>
 </body>
 </html>
 

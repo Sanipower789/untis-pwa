@@ -1,5 +1,5 @@
 // static/sw.js
-const CACHE = "untis-cache-v47";
+const CACHE = "untis-cache-v48";
 const CORE = ["/"]; // just cache the shell (index.html)
 
 self.addEventListener("install", (e) => {
@@ -65,7 +65,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   // --- JS & CSS: network-first so updates roll out automatically
-  if (url.pathname.endsWith("/app.js") || url.pathname.endsWith("/styles.css")) {
+  if (url.pathname.endsWith("/app.js") || url.pathname.endsWith("/homework.js") || url.pathname.endsWith("/styles.css")) {
     event.respondWith((async () => {
       try {
         const fresh = await fetch(event.request, { cache: "no-store" });

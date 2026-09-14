@@ -1717,6 +1717,9 @@ function showColorsPanel() {
 navKlausuren?.addEventListener('click', showKlausurenPanel);
 
 navColors?.addEventListener('click', showColorsPanel);
+document.getElementById('navNotifications')?.addEventListener('click', () => {
+  activateSidebarPanel(document.getElementById('panelNotifications'), document.getElementById('navNotifications'));
+});
 
 showKlausurenPanel();
 
@@ -1740,7 +1743,8 @@ function showLessonOverlay(payload){
 
   if (!overlayRoot) return;
 
-  const { title, subtitle, meta = [], note = '' } = payload || {};
+  const { title, subtitle, meta = [], note = '', lesson } = payload || {};
+  window.Homework?.renderLessonDetails(lesson);
 
   overlayTitle.textContent = title || '';
 
@@ -2288,7 +2292,7 @@ const PushNotifications = (() => {
 
   async function registrationAndSubscription() {
     const existing = await navigator.serviceWorker.getRegistration("/");
-    if (!existing) await navigator.serviceWorker.register("/sw.js?v=47");
+    if (!existing) await navigator.serviceWorker.register("/sw.js?v=48");
     const registration = await new Promise((resolve, reject) => {
       const timeout = window.setTimeout(
         () => reject(new Error("service_worker_ready_timeout")),
@@ -2985,6 +2989,7 @@ function showView(view) {
     setAccountInfo();
 
     PushNotifications.setAuthenticated(state.loggedIn);
+    window.Homework?.authChanged(state.loggedIn ? state.username : null);
 
     if (state.loggedIn) {
 
@@ -3964,6 +3969,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
     h.className = "hdr day";
 
     h.textContent = WEEKDAYS[d - 1];
+    window.Homework?.decorateDay(h, isoByDay[d]);
 
     grid.appendChild(h);
 
@@ -4146,6 +4152,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
       if (roomLabel) meta.push({ label: "Raum", value: roomLabel });
       card.addEventListener("click", () => showLessonOverlay({
         title: klausur.name || "Klausur",
+        lesson: l,
         subtitle: klausur.subject ? `${klausur.subject} - ${datePretty}` : datePretty,
         meta
       }));
@@ -4202,6 +4209,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
       card.addEventListener("click", () => showLessonOverlay({
         title: subj || "Unterricht",
+        lesson: l,
         subtitle: timeRange ? `${datePretty} - ${timeRange}` : datePretty,
         meta,
         note: l.note || ""
@@ -4216,6 +4224,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
 
 
+    window.Homework?.decorateLesson(card, l);
     grid.appendChild(card);
 
   });
@@ -4385,6 +4394,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
   const containerEl = document.getElementById("timetable");
 
   containerEl.appendChild(grid);
+  window.Homework?.decorateWeek(containerEl, weekStart);
 
 }
 
@@ -4529,6 +4539,9 @@ async function loadTimetable(force = false, weekStart = null) {
     console.error(err);
 
   }
+  if (stillCurrent()) {
+    window.Homework?.refresh();
+  }
 
 }
 
@@ -4542,7 +4555,7 @@ if ("serviceWorker" in navigator) {
 
     try {
 
-      const reg = await navigator.serviceWorker.register("/sw.js?v=47");
+      const reg = await navigator.serviceWorker.register("/sw.js?v=48");
 
       reg.update();
 

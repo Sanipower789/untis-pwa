@@ -1,4 +1,6 @@
 import os, json, time, re, sqlite3, shutil, requests, threading, base64, binascii, tempfile, hashlib
+import uuid
+import homework
 from datetime import datetime, timedelta, date
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -432,6 +434,8 @@ def _empty_profile():
         "grade": "",
         "courses": [],
         "klausuren": [],
+        "homework": [],
+        "homeworkSettings": homework.settings({}),
         "colors": {"theme": {}, "subjects": {}},
         "notificationPreferences": dict(NOTIFICATION_PREFERENCES_DEFAULTS),
     }
@@ -603,6 +607,8 @@ def _normalise_profile(payload):
         payload.get("grade"),
     )
     profile["klausuren"] = _normalise_klausuren(payload.get("klausuren"))
+    profile["homework"] = homework.tasks(payload.get("homework"))
+    profile["homeworkSettings"] = homework.settings(payload.get("homeworkSettings"))
     profile["colors"] = _normalise_colors(payload.get("colors"))
     profile["notificationPreferences"] = _normalise_notification_preferences(
         payload.get("notificationPreferences")
@@ -749,9 +755,22 @@ def _set_settings(values):
         )
     db.commit()
 
-def _save_profile(user_id, profile):
+def _save_profile(user_id, profile, *, preserve_homework=False):
     db = get_db()
     norm = json.dumps(_normalise_profile(profile))
+    if preserve_homework:
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            current = _load_profile_for_user(_load_user(user_id))
+            merged = _normalise_profile(profile)
+            merged["homework"] = current["homework"]
+            merged["homeworkSettings"] = current["homeworkSettings"]
+            db.execute("UPDATE users SET profile_json = ? WHERE id = ?", (json.dumps(merged), user_id))
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        return
     db.execute(
         "UPDATE users SET profile_json = ? WHERE id = ?",
         (norm, user_id)
@@ -1934,7 +1953,7 @@ def api_notification_preferences():
     incoming = data.get("preferences") if isinstance(data.get("preferences"), dict) else data
     preferences = _normalise_notification_preferences(incoming)
     profile["notificationPreferences"] = preferences
-    _save_profile(user_id, profile)
+    _save_profile(user_id, profile, preserve_homework=True)
     _maybe_send_backup("notification_preferences_update")
     return _no_store(jsonify({"ok": True, "preferences": preferences}))
 
@@ -1957,9 +1976,145 @@ def api_profile():
     if not isinstance(data.get("courses"), list):
         return jsonify({"ok": False, "error": "profile_courses_required"}), 400
     profile = _normalise_profile(data)
-    _save_profile(user_id, profile)
+    # Homework has its own endpoints; older/offline profile clients cannot erase it.
+    existing = _load_profile_for_user(row)
+    profile["homework"] = existing["homework"]
+    profile["homeworkSettings"] = existing["homeworkSettings"]
+    _save_profile(user_id, profile, preserve_homework=True)
     _maybe_send_backup("profile_update")
     return _no_store(jsonify({"ok": True, "profile": profile}))
+
+_homework_weeks = {}
+_homework_weeks_lock = threading.Lock()
+
+
+def _homework_week(grade, week):
+    key = (grade, week)
+    with _homework_weeks_lock:
+        cached = _homework_weeks.get(key)
+        if cached and time.monotonic() - cached[0] < 120:
+            return cached[1]
+    try:
+        lessons = fetch_week(week, grade)
+        if not isinstance(lessons, list):
+            raise RuntimeError("homework_timetable_unavailable")
+    except Exception as exc:
+        raise RuntimeError("homework_timetable_unavailable") from exc
+    with _homework_weeks_lock:
+        if len(_homework_weeks) >= 128:
+            _homework_weeks.pop(next(iter(_homework_weeks)))
+        _homework_weeks[key] = (time.monotonic(), lessons)
+    return lessons
+
+
+def _edit_homework(user_id, edit):
+    # Fetch remote timetables BEFORE this short read-modify-write transaction.
+    db = get_db()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        row = _load_user(user_id)
+        if not row:
+            raise ValueError("unauthorized")
+        profile = _load_profile_for_user(row)
+        edit(profile)
+        _save_profile(user_id, profile)
+        return profile
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _resolve_homework(user_id):
+    profile = _load_profile_for_user(_load_user(user_id))
+    resolved = {}
+    maps = {}
+    for item in profile["homework"]:
+        grade = item["course"].split(":")[0]
+        if item["done"] or item["course"] not in _profile_selected_courses(profile, grade) or grade != profile["grade"]:
+            continue
+        if grade not in maps:
+            maps[grade] = _course_map_normalized_for_grade(grade)
+        def matches(lesson):
+            if lesson.get("grade") and lesson["grade"] != grade:
+                return False
+            return any(item["course"] in _subject_candidates(grade, subject, maps[grade])
+                       for subject in (lesson.get("subject_original"), lesson.get("subject")))
+        updated = homework.resolve(item, lambda week: _homework_week(grade, week), matches, APP_TZ)
+        if updated != item:
+            resolved[item["id"]] = (item, updated)
+    if resolved:
+        def apply(current):
+            current["homework"] = [resolved[item["id"]][1] if item["id"] in resolved
+                                   and item == resolved[item["id"]][0] else item
+                                   for item in current["homework"]]
+        profile = _edit_homework(user_id, apply)
+    return profile
+
+
+def _homework_payload(profile):
+    return {"ok": True, "homework": profile["homework"], "settings": profile["homeworkSettings"]}
+
+
+@app.route("/api/homework", methods=["GET", "POST"])
+@app.route("/api/homework/<task_id>", methods=["PATCH", "DELETE"])
+def api_homework(task_id=None):
+    user_id = _current_user_id()
+    if not _load_user(user_id):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    if request.method == "GET":
+        return _no_store(jsonify(_homework_payload(_resolve_homework(user_id))))
+    data = request.get_json(silent=True)
+    if request.method != "DELETE" and not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "invalid_homework"}), 400
+    def edit(profile):
+        items = profile["homework"]
+        existing = next((item for item in items if item["id"] == task_id), None)
+        if task_id and not existing:
+            raise ValueError("homework_not_found")
+        if request.method == "DELETE":
+            profile["homework"] = [item for item in items if item["id"] != task_id]
+            return
+        if not existing and len(items) >= homework.MAX_TASKS:
+            raise ValueError("homework_limit")
+        item = dict(existing or {"id": uuid.uuid4().hex, "anchor": datetime.now(APP_TZ).isoformat(), "done": False, "remind": True})
+        for key in ("text", "course", "mode", "date", "done", "remind"):
+            if key in data:
+                item[key] = data[key]
+        grade, body = _course_grade_and_body(item.get("course"))
+        item["course"] = f"{grade}:{norm_key(body)}"
+        if not existing or item["course"] != existing["course"]:
+            if grade != profile["grade"] or item["course"] not in _profile_selected_courses(profile, grade):
+                raise ValueError("homework_course_not_selected")
+        if not existing or any(item.get(key) != existing.get(key) for key in ("course", "mode", "date")):
+            item.update(anchor=datetime.now(APP_TZ).isoformat(), due=None, resolution="pending")
+        if not isinstance(item.get("text"), str) or len(item["text"]) > 2000:
+            raise ValueError("invalid_homework")
+        clean = homework.tasks([item])
+        if not clean:
+            raise ValueError("invalid_homework")
+        profile["homework"] = [clean[0] if task["id"] == task_id else task for task in items] if existing else items + clean
+    try:
+        profile = _edit_homework(user_id, edit)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404 if str(exc) == "homework_not_found" else 400
+    _maybe_send_backup("homework_update")
+    return _no_store(jsonify(_homework_payload(profile)))
+
+
+@app.route("/api/homework-settings", methods=["PUT"])
+def api_homework_settings():
+    user_id = _current_user_id()
+    if not _load_user(user_id):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "invalid_settings"}), 400
+    def edit(profile):
+        profile["homeworkSettings"] = homework.settings({**profile["homeworkSettings"], **data})
+    profile = _edit_homework(user_id, edit)
+    _maybe_send_backup("homework_settings_update")
+    return _no_store(jsonify(_homework_payload(profile)))
+
 
 # ---- Admin auth/UI ----
 def _require_admin() -> bool:
@@ -2660,6 +2815,8 @@ def _fetch_notification_timetable_events(now: datetime) -> list[dict]:
         for week_start in (current_week, current_week + timedelta(days=7)):
             try:
                 lessons = fetch_week(week_start, grade) or []
+                with _homework_weeks_lock:
+                    _homework_weeks[(grade, week_start)] = (time.monotonic(), lessons)
                 events.extend(
                     _compare_and_store_notification_snapshot(
                         grade,
@@ -2669,6 +2826,8 @@ def _fetch_notification_timetable_events(now: datetime) -> list[dict]:
                     )
                 )
             except Exception as exc:
+                with _homework_weeks_lock:
+                    _homework_weeks.pop((grade, week_start), None)
                 get_db().rollback()
                 app.logger.warning(
                     "notification timetable fetch failed for %s/%s: %s",
@@ -3064,6 +3223,50 @@ def _send_daily_summaries(now: datetime) -> int:
     return sent
 
 
+def _send_homework_reminders(now):
+    users = get_db().execute("SELECT DISTINCT user_id FROM push_subscriptions").fetchall()
+    sent = 0
+    for row in users:
+        user_id = int(row["user_id"])
+        original = _load_profile_for_user(_load_user(user_id))
+        if not original["notificationPreferences"]["enabled"] or not original["homeworkSettings"]["reminders"]:
+            continue
+        profile = _resolve_homework(user_id)
+        prefs = profile["homeworkSettings"]
+        selected = _profile_selected_courses(profile, profile["grade"])
+        for item in profile["homework"]:
+            if item["course"] not in selected:
+                continue
+            timing = homework.reminder_at(item, prefs, APP_TZ)
+            if not timing:
+                continue
+            reminder, deadline = timing
+            if not reminder <= now < deadline:
+                continue
+            # A moved deadline gets a new key; repeated monitor cycles do not.
+            key = f"homework:{item['id']}:{deadline.isoformat()}"
+            if _delivery_exists(user_id, key):
+                continue
+            latest = _load_profile_for_user(_load_user(user_id))
+            current_item = next((task for task in latest["homework"] if task["id"] == item["id"]), None)
+            if (current_item != item or not latest["notificationPreferences"]["enabled"]
+                    or latest["homeworkSettings"] != prefs
+                    or item["course"] not in _profile_selected_courses(latest, latest["grade"])):
+                continue
+            grade, subject = item["course"].split(":", 1)
+            course_map = _course_map_normalized_for_grade(grade)
+            label = course_map.get(subject) or subject
+            result = _send_push_to_user(user_id, {
+                "title": f"Hausaufgaben: {label} ({grade})",
+                "body": f"Bis {deadline.strftime('%d.%m., %H:%M')}: {item['text']}"[:240],
+                "url": "/?homework=1", "tag": key,
+            }, ttl=max(1, min(12 * 3600, int((deadline - now).total_seconds()))))
+            if result["sent"] > 0:
+                _record_deliveries(user_id, [key], int(now.timestamp()))
+                sent += 1
+    return sent
+
+
 def _run_notification_cycle(now: datetime | None = None) -> dict:
     current = now or datetime.now(APP_TZ)
     events = _fetch_notification_timetable_events(current)
@@ -3071,6 +3274,7 @@ def _run_notification_cycle(now: datetime | None = None) -> dict:
         "events": len(events),
         "timetableUsers": _send_timetable_event_notifications(events, current),
         "examReminders": _send_exam_reminders(current),
+        "homeworkReminders": _send_homework_reminders(current),
         "dailySummaries": _send_daily_summaries(current),
     }
     cutoff = int(current.timestamp()) - 90 * 24 * 3600

@@ -27,6 +27,29 @@ At the yearly rollover, do not leave the same Untis account assigned to two grad
 
 Notification preferences are saved per account and included in the normal backup. Timetable snapshots are isolated by grade and week; the first successful check only creates a baseline and sends no change alerts. A sleeping Render service cannot run background checks, so reliable scheduled delivery requires an always-on instance or an external service that keeps the web service awake.
 
+## Homework
+
+The sidebar's Hausaufgaben panel stores personal tasks and marker/reminder settings
+in the account profile, including existing backups. A task uses either a fixed
+date (day-header marker) or the next confirmed, non-cancelled lesson of its exact
+grade and course (lesson marker). Completed or unselected-course tasks do not
+produce reminders. A fixed deadline does not move with cancellations.
+
+Next-lesson deadlines retain their original assignment anchor. Confirmed
+cancellations advance the deadline, including across weekends and holidays;
+overdue tasks do not move just because time passes. Missing timetable data is
+shown as unconfirmed, never guessed. The search covers up to eight weeks from
+the anchor or last confirmed deadline; unpublished lessons remain pending.
+
+Reminders use Europe/Berlin time and the existing push monitor and VAPID setup;
+no additional environment variables or Codex automation are required. Users can
+choose 0-7 days of notice, a time, and disable individual tasks. A same-day time
+after class is capped at 15 minutes before class. Delivery runs on the existing
+polling interval while the server is awake, and requires browser push permission.
+
+Tests: `python -m unittest discover -s tests` and
+`node --test tests/*.test.cjs`.
+
 ## Optional remote backup (free) via Google Drive
 `app.py` can POST backups to `BACKUP_WEBHOOK_URL` and auto-restore from `AUTO_RESTORE_URL` when the DB is empty.
 
