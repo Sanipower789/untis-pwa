@@ -1,5 +1,5 @@
 // static/sw.js
-const CACHE = "untis-cache-v48";
+const CACHE = "untis-cache-v49";
 const CORE = ["/"]; // just cache the shell (index.html)
 
 self.addEventListener("install", (e) => {

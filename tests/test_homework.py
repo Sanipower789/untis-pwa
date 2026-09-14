@@ -1,6 +1,7 @@
 import copy
 import json
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -155,6 +156,36 @@ class HomeworkAPITests(unittest.TestCase):
         self.assertTrue(self.profile()['homework'][0]['done'])
         self.assertEqual(self.client.delete('/api/homework/' + identifier).status_code, 200)
         self.assertEqual(self.profile()['homework'], [])
+
+    def test_committed_save_returns_while_remote_backup_is_blocked(self):
+        entered, release = threading.Event(), threading.Event()
+        workers = []
+        thread_type = threading.Thread
+        def thread_factory(**kwargs):
+            worker = thread_type(**kwargs)
+            workers.append(worker)
+            return worker
+        def slow_backup(*args):
+            entered.set()
+            release.wait(5)
+        self.backup.side_effect = slow_backup
+        with patch.object(app, 'BACKUP_WEBHOOK_URL', 'https://example.invalid/backup'), \
+                patch.object(app.threading, 'Thread', side_effect=thread_factory):
+            try:
+                result = self.client.post('/api/homework', json={
+                    'course': 'Q1:ekeg8', 'text': 'Diagramm', 'mode': 'next'})
+                self.assertEqual(result.status_code, 200)
+                self.assertTrue(entered.wait(2))
+                self.assertFalse(release.is_set())
+                self.assertEqual(self.profile()['homework'][0]['text'], 'Diagramm')
+                self.assertEqual(self.client.put('/api/homework-settings', json={'reminders': True}).status_code, 200)
+                self.assertEqual(len(workers), 1)
+            finally:
+                release.set()
+                for worker in workers:
+                    worker.join(5)
+            self.assertFalse(app._homework_backup_running)
+            self.assertEqual(self.backup.call_count, 2)
 
     def test_unselected_courses_and_other_users_ids_are_rejected(self):
         for course in ('EF:ekeg8', 'Q2:ekeg8', 'Q1:other'):

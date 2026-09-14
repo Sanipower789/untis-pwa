@@ -20,6 +20,9 @@ window.Homework = (() => {
     homework_course_not_selected: 'Bitte einen ausgewählten Kurs deiner Stufe wählen.',
     homework_limit: 'Maximal 100 Aufgaben. Bitte alte Aufgaben löschen.',
     invalid_homework: 'Bitte Fach, Aufgabentext und Fälligkeit prüfen.',
+    cross_origin_request: 'Die Sicherheitsprüfung hat das Speichern abgelehnt. Bitte die App neu öffnen.',
+    offline: 'Der Server ist gerade nicht erreichbar. Dein Entwurf bleibt erhalten.',
+    invalid_json_object: 'Die Anfrage konnte nicht verarbeitet werden. Bitte die App neu laden.',
   };
   function status(message, bad = false, id = 'homework-status') {
     $(id).textContent = message;
@@ -29,8 +32,11 @@ window.Homework = (() => {
     const response = await fetch(url, { method, cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) });
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(errors[data.error] || 'Nicht gespeichert. Bitte Verbindung prüfen und erneut versuchen.');
+    let data;
+    try { data = await response.json(); }
+    catch { throw new Error(`Der Server hat keine gültige Antwort geliefert (HTTP ${response.status}). Dein Entwurf bleibt erhalten.`); }
+    if (!response.ok || !data.ok) throw new Error(errors[data.error] ||
+      `Speichern fehlgeschlagen (HTTP ${response.status}${data.error ? ', ' + data.error : ''}). Dein Entwurf bleibt erhalten.`);
     return data;
   }
   const selected = () => getSelectedCourseKeys();

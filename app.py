@@ -1986,6 +1986,40 @@ def api_profile():
 
 _homework_weeks = {}
 _homework_weeks_lock = threading.Lock()
+_homework_backup_lock = threading.Lock()
+_homework_backup_pending = False
+_homework_backup_running = False
+
+
+def _queue_homework_backup():
+    # A slow remote backup must not delay acknowledgement of a committed save.
+    global _homework_backup_pending, _homework_backup_running
+    if not BACKUP_WEBHOOK_URL:
+        return
+    with _homework_backup_lock:
+        _homework_backup_pending = True
+        if _homework_backup_running:
+            return
+        _homework_backup_running = True
+    def worker():
+        global _homework_backup_pending, _homework_backup_running
+        while True:
+            with _homework_backup_lock:
+                if not _homework_backup_pending:
+                    _homework_backup_running = False
+                    return
+                _homework_backup_pending = False
+            try:
+                with app.app_context():
+                    _maybe_send_backup('homework_update')
+            except Exception:
+                app.logger.exception('homework background backup failed')
+    try:
+        threading.Thread(target=worker, name='homework-backup', daemon=True).start()
+    except Exception:
+        with _homework_backup_lock:
+            _homework_backup_running = False
+        app.logger.exception('homework background backup could not start')
 
 
 def _homework_week(grade, week):
@@ -2097,7 +2131,7 @@ def api_homework(task_id=None):
         profile = _edit_homework(user_id, edit)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 404 if str(exc) == "homework_not_found" else 400
-    _maybe_send_backup("homework_update")
+    _queue_homework_backup()
     return _no_store(jsonify(_homework_payload(profile)))
 
 
@@ -2112,7 +2146,7 @@ def api_homework_settings():
     def edit(profile):
         profile["homeworkSettings"] = homework.settings({**profile["homeworkSettings"], **data})
     profile = _edit_homework(user_id, edit)
-    _maybe_send_backup("homework_settings_update")
+    _queue_homework_backup()
     return _no_store(jsonify(_homework_payload(profile)))
 
 
