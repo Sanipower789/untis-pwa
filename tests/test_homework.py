@@ -1,5 +1,6 @@
 import copy
 import json
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -186,6 +187,24 @@ class HomeworkAPITests(unittest.TestCase):
                     worker.join(5)
             self.assertFalse(app._homework_backup_running)
             self.assertEqual(self.backup.call_count, 2)
+
+    def test_homework_and_settings_commit_while_another_connection_is_reading(self):
+        reader = sqlite3.connect(app.DB_PATH, timeout=0)
+        try:
+            reader.execute('BEGIN')
+            reader.execute('SELECT profile_json FROM users').fetchall()
+            with patch.object(app, 'SQLITE_BUSY_TIMEOUT_MS', 50):
+                result = self.client.post('/api/homework', json={
+                    'course': 'Q1:ekeg8', 'text': 'Diagramm', 'mode': 'next'})
+                self.assertEqual(result.status_code, 200)
+                self.assertEqual(self.client.put('/api/homework-settings', json={
+                    'reminders': True, 'reminderTime': '17:00'}).status_code, 200)
+            profile = self.profile()
+            self.assertEqual(profile['homework'][0]['text'], 'Diagramm')
+            self.assertEqual(profile['homeworkSettings']['reminderTime'], '17:00')
+        finally:
+            reader.rollback()
+            reader.close()
 
     def test_unselected_courses_and_other_users_ids_are_rejected(self):
         for course in ('EF:ekeg8', 'Q2:ekeg8', 'Q1:other'):

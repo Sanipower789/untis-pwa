@@ -213,12 +213,12 @@ def _rollback_db(db: sqlite3.Connection) -> None:
 def init_db():
     _ensure_db_path()
     conn = _connect_db()
-    # Render's ephemeral filesystem does not keep SQLite WAL sidecar files
-    # reliable across instance lifecycle events. Use the rollback journal and
-    # keep notification transactions short instead.
-    journal_mode = str(conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]).lower()
-    if journal_mode != "delete":
-        app.logger.warning("SQLite DELETE journal unavailable; active mode is %s", journal_mode)
+    # Readers (including the notification monitor) must not block save commits.
+    # SQLite owns the WAL sidecars; keep them beside the database, never delete them.
+    journal_mode = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+    if journal_mode != "wal":
+        conn.close()
+        raise RuntimeError(f"SQLite WAL unavailable; active mode is {journal_mode}")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
