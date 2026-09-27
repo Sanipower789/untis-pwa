@@ -102,6 +102,33 @@ const isLocalPreview = () =>
 /* --- LocalStorage (profile) --- */
 
 const LS_COURSES = "myCourses";
+const getExamCourses = () => JSON.parse(localStorage.getItem('myExamCourses') || 'null');
+const setExamCourses = value => {
+  localStorage.setItem('myExamCourses', JSON.stringify(Array.isArray(value) ? value : null));
+  scheduleProfileSync();
+};
+
+function renderExamCourses(){
+  const root = document.getElementById('exam-course-selection');
+  if (!root) return;
+  const chosen = getExamCourses();
+  const courses = [...getSelectedCourseKeys()].filter(key => key.startsWith(getGrade() + ':'));
+  root.replaceChildren();
+  for (const key of courses){
+    const label = document.createElement('label'); label.className = 'notification-toggle';
+    const input = document.createElement('input'); input.type = 'checkbox';
+    input.checked = chosen === null || chosen.includes(key);
+    const caption = document.createElement('span'); caption.textContent = COURSE_LABEL_BY_KEY.get(key) || key;
+    input.addEventListener('change', () => {
+      const next = new Set(getExamCourses() ?? [...getSelectedCourseKeys()]);
+      if (input.checked) next.add(key); else next.delete(key);
+      setExamCourses([...next]);
+      renderKlausurList(); rebuildGridNow();
+    });
+    label.append(input, caption); root.appendChild(label);
+  }
+  if (!courses.length) root.textContent = 'Noch keine Kurse ausgewählt.';
+}
 
 const LS_NAME    = "myName";
 
@@ -846,11 +873,12 @@ function examMatchesSelection(exam, selectedSet){
   if (!profileGrade) return false;
   const examGrade = String(exam?.grade || "").trim().toUpperCase();
   if (examGrade && examGrade !== profileGrade) return false;
-  if (!(selectedSet instanceof Set) || selectedSet.size === 0) return true;
+  if (!(selectedSet instanceof Set) || selectedSet.size === 0) return false;
+  const examCourses = getExamCourses();
   const keys = examCourseKeys(exam);
   if (!keys.size) return false;
   for (const key of keys) {
-    if (selectedSet.has(key)) return true;
+    if (selectedSet.has(key) && (examCourses === null || examCourses.includes(key))) return true;
   }
   return false;
 }
@@ -1899,6 +1927,7 @@ formKlausur?.addEventListener('submit', (e) => {
 
 
 function renderKlausurList() {
+  renderExamCourses();
   const selectedCourses = getSelectedCourseKeys();
   const data = getAllKlausuren()
     .filter(k => examMatchesSelection(k, selectedCourses))
@@ -2292,7 +2321,7 @@ const PushNotifications = (() => {
 
   async function registrationAndSubscription() {
     const existing = await navigator.serviceWorker.getRegistration("/");
-    if (!existing) await navigator.serviceWorker.register("/sw.js?v=48");
+    if (!existing) await navigator.serviceWorker.register("/sw.js?v=50");
     const registration = await new Promise((resolve, reject) => {
       const timeout = window.setTimeout(
         () => reject(new Error("service_worker_ready_timeout")),
@@ -2670,6 +2699,7 @@ function showView(view) {
       grade: getGrade(),
 
       courses: getCourses(),
+      examCourses: getExamCourses(),
 
       klausuren: KlausurenStore.load(),
 
@@ -2798,6 +2828,7 @@ function showView(view) {
       if (typeof profile.name === "string") setName(profile.name);
       if (typeof profile.grade === "string") setGrade(profile.grade);
       if (Array.isArray(profile.courses)) setCourses(profile.courses);
+      setExamCourses(profile.examCourses);
       if (Array.isArray(profile.klausuren)) KlausurenStore.save(profile.klausuren);
       PushNotifications.setPreferences(profile.notificationPreferences);
     });
@@ -4555,7 +4586,7 @@ if ("serviceWorker" in navigator) {
 
     try {
 
-      const reg = await navigator.serviceWorker.register("/sw.js?v=48");
+      const reg = await navigator.serviceWorker.register("/sw.js?v=50");
 
       reg.update();
 

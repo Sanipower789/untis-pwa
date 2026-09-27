@@ -147,6 +147,10 @@
     <!-- Klausuren Panel -->
     </section>
     <section id="panelKlausuren" class="sidebar-panel">
+      <details class="accordion" open>
+        <summary>Klausurfächer</summary>
+        <div id="exam-course-selection" class="accordion-body"></div>
+      </details>
       <details id="klausurAccordion" class="accordion" open>
         <summary>Klausuren verwalten</summary>
         <div class="accordion-body">
@@ -357,7 +361,7 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='app.js') }}?v=48"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=50"></script>
   <script src="{{ url_for('static', filename='homework.js') }}?v=49"></script>
 </body>
 </html>

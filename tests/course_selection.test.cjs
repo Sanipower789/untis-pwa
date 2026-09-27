@@ -5,6 +5,21 @@ const vm = require('node:vm');
 const { test } = require('node:test');
 const app = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
 
+test('exam subjects filter selected courses and keep an explicit empty selection empty', () => {
+  let chosen = null;
+  const ctx = vm.createContext({Set, getGrade: () => 'Q1', getExamCourses: () => chosen,
+    examCourseKeys: exam => new Set([exam.subject])});
+  vm.runInContext(app.slice(app.indexOf('function examMatchesSelection'), app.indexOf('function bestExamKey')), ctx);
+  const selected = new Set(['Q1:math', 'Q1:biology']);
+  assert.equal(ctx.examMatchesSelection({grade:'Q1',subject:'Q1:math'}, selected), true);
+  chosen = ['Q1:biology'];
+  assert.equal(ctx.examMatchesSelection({grade:'Q1',subject:'Q1:math'}, selected), false);
+  assert.equal(ctx.examMatchesSelection({grade:'Q1',subject:'Q1:biology'}, selected), true);
+  assert.equal(ctx.examMatchesSelection({grade:'EF',subject:'Q1:biology'}, selected), false);
+  chosen = [];
+  assert.equal(ctx.examMatchesSelection({grade:'Q1',subject:'Q1:biology'}, selected), false);
+});
+
 function setup(options = []) {
   const ctx = vm.createContext({
     PROFILE_GRADES: new Set(['EF', 'Q1', 'Q2']), getGrade: () => 'Q1',

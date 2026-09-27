@@ -433,6 +433,7 @@ def _empty_profile():
         "name": "",
         "grade": "",
         "courses": [],
+        "examCourses": None,
         "klausuren": [],
         "homework": [],
         "homeworkSettings": homework.settings({}),
@@ -607,6 +608,9 @@ def _normalise_profile(payload):
         payload.get("grade"),
     )
     profile["klausuren"] = _normalise_klausuren(payload.get("klausuren"))
+    if isinstance(payload.get("examCourses"), list):
+        keys, _ = _normalise_profile_courses(payload["examCourses"], profile["grade"])
+        profile["examCourses"] = [key for key in keys if key in profile["courses"]]
     profile["homework"] = homework.tasks(payload.get("homework"))
     profile["homeworkSettings"] = homework.settings(payload.get("homeworkSettings"))
     profile["colors"] = _normalise_colors(payload.get("colors"))
@@ -1982,6 +1986,8 @@ def api_profile():
     profile = _normalise_profile(data)
     # Homework has its own endpoints; older/offline profile clients cannot erase it.
     existing = _load_profile_for_user(row)
+    if "examCourses" not in data:
+        profile["examCourses"] = existing["examCourses"]
     profile["homework"] = existing["homework"]
     profile["homeworkSettings"] = existing["homeworkSettings"]
     _save_profile(user_id, profile, preserve_homework=True)
@@ -2065,6 +2071,12 @@ def _edit_homework(user_id, edit):
 
 def _resolve_homework(user_id):
     profile = _load_profile_for_user(_load_user(user_id))
+    now = datetime.now(APP_TZ)
+    if any(homework.expired(item, now) for item in profile["homework"]):
+        def prune(current):
+            current["homework"] = [item for item in current["homework"] if not homework.expired(item, now)]
+        profile = _edit_homework(user_id, prune)
+        _queue_homework_backup()
     resolved = {}
     maps = {}
     for item in profile["homework"]:
@@ -3142,6 +3154,8 @@ def _send_exam_reminders(now: datetime) -> int:
         if not grade or not preferences["enabled"] or not preferences["examReminders"]:
             continue
         selected = _profile_selected_courses(profile, grade)
+        if profile["examCourses"] is not None:
+            selected.intersection_update(profile["examCourses"])
         reminder_days = preferences["examReminderDays"]
         target_date = now.date() + timedelta(days=reminder_days)
         candidates: list[dict] = []
@@ -3158,7 +3172,7 @@ def _send_exam_reminders(now: datetime) -> int:
             if str(exam.get("date") or "") != target_date.isoformat():
                 continue
             subject = str(exam.get("subject") or "").strip()
-            if exam.get("source") != "personal" and not selected.intersection(
+            if not selected.intersection(
                 _subject_candidates(grade, subject, course_maps[grade])
             ):
                 continue
@@ -3306,8 +3320,19 @@ def _send_homework_reminders(now):
     return sent
 
 
+def _purge_completed_homework(current):
+    for row in get_db().execute('SELECT id, profile_json FROM users').fetchall():
+        profile = _load_profile_for_user(row)
+        if any(homework.expired(item, current) for item in profile['homework']):
+            def prune(saved):
+                saved['homework'] = [item for item in saved['homework'] if not homework.expired(item, current)]
+            _edit_homework(row['id'], prune)
+            _queue_homework_backup()
+
+
 def _run_notification_cycle(now: datetime | None = None) -> dict:
     current = now or datetime.now(APP_TZ)
+    _purge_completed_homework(current)
     events = _fetch_notification_timetable_events(current)
     result = {
         "events": len(events),
@@ -3444,8 +3469,25 @@ def _start_notification_worker() -> None:
 
 
 _runtime_workers_started = False
+_homework_cleanup_started = False
 _auto_restore_retry_started = False
 _auto_backup_started = False
+
+
+def _start_homework_cleanup_worker():
+    global _homework_cleanup_started
+    if _homework_cleanup_started:
+        return
+    _homework_cleanup_started = True
+    def worker():
+        while True:
+            time.sleep(300)
+            try:
+                with app.app_context():
+                    _purge_completed_homework(datetime.now(APP_TZ))
+            except Exception:
+                app.logger.exception('completed homework cleanup failed')
+    threading.Thread(target=worker, name='homework-cleanup', daemon=True).start()
 
 
 def _start_runtime_workers() -> None:
@@ -3526,6 +3568,9 @@ except Exception:
     app.logger.exception("auto-restore hook failed")
     if AUTO_RESTORE_URL:
         raise
+
+
+_start_homework_cleanup_worker()
 
 
 @app.route("/api/admin/backup")

@@ -10,6 +10,20 @@ DEFAULT_SETTINGS = {
 MAX_TASKS = 100
 
 
+def expired(task, now):
+    if not task.get('done'):
+        return False
+    due = task.get('due') or {}
+    if task.get('mode') == 'next' and task.get('resolution') != 'resolved':
+        return False
+    day = task.get('date') if task.get('mode') == 'date' else due.get('date')
+    try:
+        deadline = datetime.fromisoformat(day + 'T' + (due.get('start') or '00:00')).replace(tzinfo=now.tzinfo)
+        return now >= deadline + timedelta(days=1)
+    except (TypeError, ValueError):
+        return False
+
+
 def settings(value):
     source = value if isinstance(value, dict) else {}
     result = dict(DEFAULT_SETTINGS)

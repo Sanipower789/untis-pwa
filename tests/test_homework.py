@@ -27,6 +27,16 @@ def lesson(day, start='09:10', status='normal', **changes):
 
 
 class HomeworkDeadlinesTests(unittest.TestCase):
+    def test_completed_homework_expires_one_day_after_confirmed_deadline(self):
+        item = task(done=True, due={'date': '2026-09-18', 'start': '09:10'}, resolution='resolved')
+        before = datetime(2026, 9, 19, 9, 9, tzinfo=TZ)
+        after = datetime(2026, 9, 19, 9, 10, tzinfo=TZ)
+        self.assertFalse(homework.expired(item, before))
+        self.assertTrue(homework.expired(item, after))
+        self.assertFalse(homework.expired({**item, 'done': False}, after))
+        self.assertFalse(homework.expired({**item, 'resolution': 'unavailable'}, after))
+        self.assertFalse(homework.expired({**item, 'due': None}, after))
+        self.assertTrue(homework.expired(task(done=True, mode='date', date='2026-09-18'), after))
     def solve(self, item, lessons):
         return homework.resolve(item, lambda week: lessons, lambda row: row['grade'] == 'Q1' and row['subject'] == 'EKEG8', TZ)
 
@@ -114,6 +124,19 @@ class HomeworkDeadlinesTests(unittest.TestCase):
 
 
 class HomeworkAPITests(unittest.TestCase):
+    def test_exam_subject_preferences_roundtrip_and_legacy_preservation(self):
+        result = self.client.put('/api/profile', json={'grade': 'Q1', 'courses': ['Q1:ekeg8'],
+            'examCourses': ['EF:ekeg8', 'Q1:ekeg8', 'Q1:other']})
+        self.assertEqual(result.json['profile']['examCourses'], ['Q1:ekeg8'])
+        self.client.put('/api/profile', json={'grade': 'Q1', 'courses': ['Q1:ekeg8']})
+        self.assertEqual(self.profile()['examCourses'], ['Q1:ekeg8'])
+        self.client.put('/api/profile', json={'grade': 'Q1', 'courses': ['Q1:ekeg8'], 'examCourses': []})
+        self.assertEqual(self.profile()['examCourses'], [])
+
+    def test_expired_completed_homework_is_deleted_on_read(self):
+        self.install(task(done=True, mode='date', date='2000-01-01'))
+        self.assertEqual(self.client.get('/api/homework').json['homework'], [])
+        self.assertEqual(self.profile()['homework'], [])
     def setUp(self):
         root = tempfile.TemporaryDirectory()
         self.addCleanup(root.cleanup)
