@@ -2321,7 +2321,7 @@ const PushNotifications = (() => {
 
   async function registrationAndSubscription() {
     const existing = await navigator.serviceWorker.getRegistration("/");
-    if (!existing) await navigator.serviceWorker.register("/sw.js?v=50");
+    if (!existing) await navigator.serviceWorker.register("/sw.js?v=51");
     const registration = await new Promise((resolve, reject) => {
       const timeout = window.setTimeout(
         () => reject(new Error("service_worker_ready_timeout")),
@@ -3773,6 +3773,27 @@ async function buildCourseSelection(allLessons) {
 
 
 
+function isRemoteExamLesson(lesson, exams) {
+  // Untis can label exam bookings as ordinary Unterricht. Keep the separate
+  // cancelled lesson, and require course, grade, time AND room evidence.
+  if (lesson.status === "entfaellt") return false;
+  const grade = String(lesson.grade || "").trim().toUpperCase();
+  const subject = lesson.subject_original || lesson.subject;
+  const key = resolveCourseKey(subject, grade) || normKey(subject);
+  const roomKey = value => String(value || "").toUpperCase().replace(/[\s-]/g, "");
+  const room = roomKey(lesson.room);
+  if (!grade || !key || !room) return false;
+  return exams.some(exam => {
+    if (exam.source !== "remote" || exam.date !== lesson.date || exam.grade !== grade) return false;
+    const examKey = resolveCourseKey(exam.subject, grade) || normKey(exam.subject);
+    if (key !== examKey || !exam.startTime || !exam.endTime) return false;
+    const start = parseHM(lesson.start), end = parseHM(lesson.end);
+    if (!(start >= parseHM(exam.startTime) && end <= parseHM(exam.endTime))) return false;
+    const rooms = [...(exam.rooms || []), ...String(exam.room || "").split(",")];
+    return rooms.some(value => roomKey(value) === room);
+  });
+}
+
 function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWidth = null) {
 
   hideLessonOverlay();
@@ -3884,6 +3905,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
   const matchedKlausurIds = new Set();
 
   for (const l of lessons) {
+
+    if (isRemoteExamLesson(l, EXAMS)) continue;
 
     const d = dayIdxISO(l.date);
 
@@ -4084,7 +4107,7 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
 
     if (!Number.isFinite(periodNum)) {
 
-      periodNum = r0 + 1; // first slot of the day = 1. Stunde
+      periodNum = inferPeriodFromTime(l.start);
 
     }
 
@@ -4109,6 +4132,8 @@ function buildGrid(lessons, weekStart = null, selectedKeys = null, timeColumnWid
       return;
 
     }
+
+    if (klausur && matchedKlausurIds.has(klausur.id)) return;
 
 
 
@@ -4586,7 +4611,7 @@ if ("serviceWorker" in navigator) {
 
     try {
 
-      const reg = await navigator.serviceWorker.register("/sw.js?v=50");
+      const reg = await navigator.serviceWorker.register("/sw.js?v=51");
 
       reg.update();
 

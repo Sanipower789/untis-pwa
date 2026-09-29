@@ -6,7 +6,7 @@ const { test } = require("node:test");
 
 // Exercise the real grid renderer without booting auth, push or network requests.
 const app = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
-const gridSource = app.slice(app.indexOf("function buildGrid("), app.indexOf("/* --- Fetch + refresh --- */"));
+const gridSource = app.slice(app.indexOf("function isRemoteExamLesson("), app.indexOf("/* --- Fetch + refresh --- */"));
 
 class Element {
   constructor() {
@@ -19,7 +19,7 @@ class Element {
   addEventListener() {}
 }
 
-function render(lessons, weekStart) {
+function render(lessons, weekStart, exams = [], writesExam = false) {
   const container = new Element();
   const context = vm.createContext({
     window: {},
@@ -30,7 +30,16 @@ function render(lessons, weekStart) {
     DEFAULT_THEME: {},
     updateWeekRangeLabel() {},
     toISODate: d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
-    getAllKlausuren: () => [],
+    EXAMS: exams,
+    getAllKlausuren: () => exams,
+    examMatchesSelection: () => writesExam,
+    inferPeriodFromTime: hm => hm === "07:55" ? 1 : 2,
+    periodStartMinutes: p => p === 1 ? 475 : 550,
+    periodEndMinutes: p => p === 1 ? 535 : 610,
+    formatPeriodRange: () => "1-2",
+    mapExamRooms: k => ({label: k.room}),
+    bestExamKey: k => k.subject,
+    _norm: s => s,
     dayIdxISO: d => new Date(`${d}T00:00:00`).getDay(),
     parseHM: hm => Number(hm.split(":")[0]) * 60 + Number(hm.split(":")[1]),
     PERIOD_NUMBERS: [1, 2],
@@ -97,4 +106,45 @@ test("week filtering also works across the year boundary", () => {
   assert.equal(cards(nodes).length, 2);
   assert.equal(cards(nodes)[0].className, "lesson entfaellt");
   assert.equal(cards(nodes)[1].style.gridColumn, "6");
+});
+
+const exam = {id: "exam-1116", source: "remote", grade: "Q1", date: "2026-10-02",
+  subject: "GEEG8", name: "GEEG8/1116", startTime: "07:55", endTime: "10:10",
+  periodStart: 1, periodEnd: 2, rooms: ["AULA"], room: "AULA"};
+const cancelled = {...lesson(exam.date, "entfaellt", "GEEG8"), start: "07:55", end: "08:55", room: "A-K22"};
+const booking = {...cancelled, status: "normal", room: "Aula"};
+const booking2 = {...booking, start: "09:10", end: "10:10"};
+
+test("GEEG8 non-writer sees cancellation, not either Aula exam booking", () => {
+  const result = cards(render([cancelled, booking, booking2], "2026-09-28", [exam]));
+  assert.equal(result.length, 1);
+  assert.equal(result[0].className, "lesson entfaellt");
+  assert.doesNotMatch(result[0].innerHTML, /Aula|AULA/);
+});
+
+test("GEEG8 writer sees exactly one exam in Aula", () => {
+  const result = cards(render([cancelled, booking, booking2], "2026-09-28", [exam], true));
+  assert.equal(result.length, 1);
+  assert.equal(result[0].className, "lesson klausur");
+  assert.match(result[0].innerHTML, /AULA/);
+});
+
+test("standalone exam booking is rendered only for writers", () => {
+  assert.equal(cards(render([booking, booking2], "2026-09-28", [exam])).length, 0);
+  assert.equal(cards(render([booking, booking2], "2026-09-28", [exam], true)).length, 1);
+});
+
+test("ordinary parallel lesson remains for non-writers", () => {
+  const regular = {...cancelled, status: "normal"};
+  const result = cards(render([regular, booking], "2026-09-28", [exam]));
+  assert.equal(result.length, 1);
+  assert.equal(result[0].className, "lesson normal");
+});
+
+test("no inference from unrelated, manual, missing or out-of-time exams", () => {
+  for (const exams of [[], [{...exam, grade: "Q2"}], [{...exam, subject: "GE G4"}],
+    [{...exam, source: "manual"}], [{...exam, date: "2026-10-01"}],
+    [{...exam, startTime: "09:10"}], [{...exam, room: "B35", rooms: ["B35"]}]]) {
+    assert.equal(cards(render([booking], "2026-09-28", exams)).length, 1);
+  }
 });
