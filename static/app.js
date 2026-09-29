@@ -2321,7 +2321,7 @@ const PushNotifications = (() => {
 
   async function registrationAndSubscription() {
     const existing = await navigator.serviceWorker.getRegistration("/");
-    if (!existing) await navigator.serviceWorker.register("/sw.js?v=51");
+    if (!existing) await navigator.serviceWorker.register("/sw.js?v=52");
     const registration = await new Promise((resolve, reject) => {
       const timeout = window.setTimeout(
         () => reject(new Error("service_worker_ready_timeout")),
@@ -3781,8 +3781,9 @@ function isRemoteExamLesson(lesson, exams) {
   const subject = lesson.subject_original || lesson.subject;
   const key = resolveCourseKey(subject, grade) || normKey(subject);
   const roomKey = value => String(value || "").toUpperCase().replace(/[\s-]/g, "");
-  const room = roomKey(lesson.room);
-  if (!grade || !key || !room) return false;
+  const roomKeys = value => new Set([roomKey(value), roomKey(mapRoomValue(value))].filter(Boolean));
+  const roomsForLesson = roomKeys(lesson.room);
+  if (!grade || !key || !roomsForLesson.size) return false;
   return exams.some(exam => {
     if (exam.source !== "remote" || exam.date !== lesson.date || exam.grade !== grade) return false;
     const examKey = resolveCourseKey(exam.subject, grade) || normKey(exam.subject);
@@ -3790,7 +3791,7 @@ function isRemoteExamLesson(lesson, exams) {
     const start = parseHM(lesson.start), end = parseHM(lesson.end);
     if (!(start >= parseHM(exam.startTime) && end <= parseHM(exam.endTime))) return false;
     const rooms = [...(exam.rooms || []), ...String(exam.room || "").split(",")];
-    return rooms.some(value => roomKey(value) === room);
+    return rooms.some(value => [...roomKeys(value)].some(room => roomsForLesson.has(room)));
   });
 }
 
@@ -4611,7 +4612,7 @@ if ("serviceWorker" in navigator) {
 
     try {
 
-      const reg = await navigator.serviceWorker.register("/sw.js?v=51");
+      const reg = await navigator.serviceWorker.register("/sw.js?v=52");
 
       reg.update();
 

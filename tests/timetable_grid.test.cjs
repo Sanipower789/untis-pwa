@@ -49,6 +49,7 @@ function render(lessons, weekStart, exams = [], writesExam = false) {
     WEEKDAYS: ["Mo", "Di", "Mi", "Do", "Fr"],
     mapSubject: l => l.subject,
     mapRoom: l => l.room || "",
+    mapRoomValue: room => room === "AULA-B\u00dcHNE" ? "Aula" : room,
     resolveCourseKey: s => s,
     normKey: s => s,
     formatDate: d => d,
@@ -127,6 +128,16 @@ test("GEEG8 writer sees exactly one exam in Aula", () => {
   assert.equal(result.length, 1);
   assert.equal(result[0].className, "lesson klausur");
   assert.match(result[0].innerHTML, /AULA/);
+});
+
+test("Untis long room name AULA-BUEHNE matches the exam short name AULA", () => {
+  const bookings = [booking, booking2].map(l => ({...l, room: "AULA-B\u00dcHNE"}));
+  const result = cards(render([cancelled, ...bookings], "2026-09-28", [exam]));
+  assert.equal(result.length, 1);
+  assert.equal(result[0].className, "lesson entfaellt");
+  const writer = cards(render([cancelled, ...bookings], "2026-09-28", [exam], true));
+  assert.equal(writer.length, 1);
+  assert.equal(writer[0].className, "lesson klausur");
 });
 
 test("standalone exam booking is rendered only for writers", () => {

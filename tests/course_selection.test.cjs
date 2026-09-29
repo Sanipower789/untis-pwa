@@ -39,6 +39,24 @@ test('a grade-specific alias never resolves to another grade', () => {
   assert.equal(ctx.resolveCourseKey('Q1:BI G1', 'Q1'), null);
 });
 
+test('production exam matching resolves course and room long names together', () => {
+  const ctx = setup([{key: 'Q1:gk geschichte bili', label: 'GEEG8', grade: 'Q1'}]);
+  ctx.ROOM_MAP = {'aula buhne': 'Aula', aula: 'Aula'};
+  ctx.parseHM = hm => Number(hm.split(':')[0]) * 60 + Number(hm.split(':')[1]);
+  vm.runInContext(app.slice(app.indexOf('const normKey ='), app.indexOf('/* --- Colour preferences --- */')), ctx);
+  vm.runInContext(app.slice(app.indexOf('function isRemoteExamLesson('), app.indexOf('function buildGrid(')), ctx);
+  const lesson = {grade:'Q1', date:'2026-10-02', start:'07:55', end:'08:55',
+    subject:'GK GESCHICHTE bili', room:'AULA-B\u00dcHNE', status:'normal'};
+  const exam = {grade:'Q1', date:lesson.date, startTime:'07:55', endTime:'10:10',
+    subject:'GEEG8', rooms:['AULA'], source:'remote'};
+  assert.equal(ctx.isRemoteExamLesson(lesson, [exam]), true);
+  assert.equal(ctx.isRemoteExamLesson({...lesson, status:'entfaellt'}, [exam]), false);
+  assert.equal(ctx.isRemoteExamLesson({...lesson, room:'A-K22'}, [exam]), false);
+  assert.equal(ctx.isRemoteExamLesson(lesson, [{...exam, grade:'Q2'}]), false);
+  ctx.ROOM_MAP = {'aula buhne': '', aula: ''};
+  assert.equal(ctx.isRemoteExamLesson(lesson, [exam]), false);
+});
+
 test('ambiguous labels in the same grade are not silently assigned', () => {
   const ctx = setup([
     { key: 'Q1:biology 1', label: 'Biology', grade: 'Q1' },
